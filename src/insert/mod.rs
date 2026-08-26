@@ -109,3 +109,97 @@ fn classify_app(bundle_id: &str) -> InsertStrategy {
         _ => InsertStrategy::Paste,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppOverride;
+
+    #[test]
+    fn test_terminal_apps_use_type() {
+        assert_eq!(classify_app("com.apple.Terminal"), InsertStrategy::Type);
+        assert_eq!(classify_app("com.googlecode.iterm2"), InsertStrategy::Type);
+        assert_eq!(classify_app("io.alacritty"), InsertStrategy::Type);
+        assert_eq!(classify_app("net.kovidgoyal.kitty"), InsertStrategy::Type);
+        assert_eq!(classify_app("dev.warp.Warp-Stable"), InsertStrategy::Type);
+        assert_eq!(classify_app("com.mitchellh.ghostty"), InsertStrategy::Type);
+    }
+
+    #[test]
+    fn test_electron_tuis_use_type() {
+        assert_eq!(classify_app("com.anthropic.claudefordesktop"), InsertStrategy::Type);
+        assert_eq!(classify_app("dev.opencode"), InsertStrategy::Type);
+        assert_eq!(classify_app("com.openai.codex"), InsertStrategy::Type);
+    }
+
+    #[test]
+    fn testIDES_use_paste() {
+        assert_eq!(classify_app("com.microsoft.VSCode"), InsertStrategy::Paste);
+        assert_eq!(classify_app("com.jetbrains.intellij"), InsertStrategy::Paste);
+        assert_eq!(classify_app("com.jetbrains.rustrover"), InsertStrategy::Paste);
+    }
+
+    #[test]
+    fn test_unknown_app_uses_paste() {
+        assert_eq!(classify_app("com.spotify.client"), InsertStrategy::Paste);
+        assert_eq!(classify_app("com.apple.Safari"), InsertStrategy::Paste);
+    }
+
+    #[test]
+    fn test_none_bundle_id_uses_paste() {
+        let config = InsertionConfig {
+            default: "auto".into(),
+            key_delay_ms: 20,
+            paste_delay_ms: 10,
+            restore_clipboard: true,
+            apps: vec![],
+        };
+        assert_eq!(resolve_strategy(&None, &config), InsertStrategy::Paste);
+    }
+
+    #[test]
+    fn test_user_override_takes_precedence() {
+        let config = InsertionConfig {
+            default: "auto".into(),
+            key_delay_ms: 20,
+            paste_delay_ms: 10,
+            restore_clipboard: true,
+            apps: vec![AppOverride {
+                bundle_id: "com.anthropic.claudefordesktop".into(),
+                strategy: "paste".into(),
+            }],
+        };
+        assert_eq!(
+            resolve_strategy(&Some("com.anthropic.claudefordesktop".into()), &config),
+            InsertStrategy::Paste
+        );
+    }
+
+    #[test]
+    fn test_global_type_default() {
+        let config = InsertionConfig {
+            default: "type".into(),
+            key_delay_ms: 20,
+            paste_delay_ms: 10,
+            restore_clipboard: true,
+            apps: vec![],
+        };
+        assert_eq!(resolve_strategy(&None, &config), InsertStrategy::Type);
+        assert_eq!(
+            resolve_strategy(&Some("com.microsoft.VSCode".into()), &config),
+            InsertStrategy::Type
+        );
+    }
+
+    #[test]
+    fn test_global_clipboard_only_default() {
+        let config = InsertionConfig {
+            default: "clipboard_only".into(),
+            key_delay_ms: 20,
+            paste_delay_ms: 10,
+            restore_clipboard: true,
+            apps: vec![],
+        };
+        assert_eq!(resolve_strategy(&None, &config), InsertStrategy::ClipboardOnly);
+    }
+}

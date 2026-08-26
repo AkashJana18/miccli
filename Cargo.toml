@@ -2,8 +2,19 @@
 name = "miccli"
 version = "0.1.0"
 edition = "2021"
-description = "Terminal voice dictation CLI"
+rust-version = "1.75"
+authors = ["miccli contributors"]
+description = "Terminal voice dictation CLI — local Whisper STT + code-aware cleanup + smart text insertion"
 license = "MIT"
+repository = "https://github.com/miccli/miccli"
+homepage = "https://github.com/miccli/miccli"
+documentation = "https://docs.rs/miccli"
+readme = "README.md"
+keywords = ["voice", "dictation", "whisper", "terminal", "stt"]
+categories = ["command-line-utilities", "accessibility"]
+
+[badges]
+maintenance = { status = "actively-developed" }
 
 [dependencies]
 cpal = "0.16"

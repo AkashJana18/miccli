@@ -10,7 +10,7 @@ pub struct Config {
     pub whisper: WhisperConfig,
     #[serde(default = "default_vad")]
     pub vad: VadConfig,
-    #[serde(default)]
+    #[serde(default = "default_llm")]
     pub llm: LlmConfig,
     #[serde(default = "default_insertion")]
     pub insertion: InsertionConfig,
@@ -112,6 +112,16 @@ fn default_min_silence_ms() -> u32 { 500 }
 fn default_llm_provider() -> String { "ollama".into() }
 fn default_true() -> bool { true }
 
+fn default_llm() -> LlmConfig {
+    LlmConfig {
+        provider: default_llm_provider(),
+        model: None,
+        api_key_env: None,
+        base_url: None,
+        enabled: default_true(),
+    }
+}
+
 fn default_insertion() -> InsertionConfig {
     InsertionConfig {
         default: default_insertion_strategy(),
@@ -164,4 +174,92 @@ pub fn load_config() -> Result<Config> {
         .with_context(|| format!("Failed to parse {}", config_path.display()))?;
 
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_toml_uses_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.hotkey.key, "Fn");
+        assert_eq!(config.hotkey.modifier, "Command");
+        assert_eq!(config.whisper.model, "small");
+        assert_eq!(config.whisper.language, "en");
+        assert_eq!(config.llm.provider, "ollama");
+        assert_eq!(config.insertion.key_delay_ms, 20);
+        assert!(config.insertion.restore_clipboard);
+    }
+
+    #[test]
+    fn test_partial_config() {
+        let toml = r#"
+[hotkey]
+key = "F5"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.hotkey.key, "F5");
+        assert_eq!(config.hotkey.modifier, "Command");
+        assert_eq!(config.whisper.model, "small");
+    }
+
+    #[test]
+    fn test_full_config_with_overrides() {
+        let toml = r#"
+[hotkey]
+key = "Space"
+modifier = "Control"
+
+[whisper]
+model = "medium"
+language = "es"
+metal = false
+
+[llm]
+provider = "groq"
+model = "llama-3.1-8b-instant"
+enabled = false
+
+[insertion]
+default = "type"
+key_delay_ms = 30
+
+[[insertion.apps]]
+bundle_id = "com.anthropic.claudefordesktop"
+strategy = "paste"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.hotkey.key, "Space");
+        assert_eq!(config.whisper.model, "medium");
+        assert_eq!(config.whisper.language, "es");
+        assert!(!config.whisper.metal);
+        assert_eq!(config.llm.provider, "groq");
+        assert!(!config.llm.enabled);
+        assert_eq!(config.insertion.default, "type");
+        assert_eq!(config.insertion.key_delay_ms, 30);
+        assert_eq!(config.insertion.apps.len(), 1);
+        assert_eq!(config.insertion.apps[0].bundle_id, "com.anthropic.claudefordesktop");
+        assert_eq!(config.insertion.apps[0].strategy, "paste");
+    }
+
+    #[test]
+    fn test_invalid_toml() {
+        let result = toml::from_str::<Config>("this is not toml [[[");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_default_hotkey_values() {
+        let config = Config::default();
+        assert_eq!(config.hotkey.key, "Fn");
+        assert_eq!(config.hotkey.modifier, "Command");
+    }
+
+    #[test]
+    fn test_default_whisper_model() {
+        let config = Config::default();
+        assert_eq!(config.whisper.model, "small");
+        assert_eq!(config.vad.threshold, 0.5);
+    }
 }
