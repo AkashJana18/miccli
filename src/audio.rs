@@ -4,7 +4,7 @@ use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 
 pub const TARGET_SAMPLE_RATE: u32 = 16000;
 
@@ -65,40 +65,29 @@ impl AudioCapture {
         let source_rate = self.sample_rate() as usize;
         let source_channels = self.channels() as usize;
 
-        let params = SincInterpolationParameters {
-            sinc_len: 256,
-            f_cutoff: 0.95,
-            oversampling_factor: 128,
-            interpolation: SincInterpolationType::Cubic,
-            window: WindowFunction::BlackmanHarris2,
-        };
-
-        let mut resampler = SincFixedIn::<f32>::new(
-            TARGET_SAMPLE_RATE as f64 / source_rate as f64,
-            1.1,
-            params,
-            1024,
+        // cpal delivers input in driver-sized buffers (e.g. 512 frames), but the
+        // `SincFixedIn` resampler requires a fixed input block size. We accumulate
+        // mono frames into a pending buffer and feed the resampler in fixed blocks.
+        const RESAMPLE_BLOCK: usize = 1024;
+        let sink = Arc::new(Mutex::new(PendingResampler::new(
+            source_rate,
             source_channels,
-        )
-        .context("Failed to create resampler")?;
+            RESAMPLE_BLOCK,
+        )?));
 
         let err_tx = tx.clone();
+
+        let (sink2, sink3) = (sink.clone(), sink.clone());
+        let (err_tx2, err_tx3) = (err_tx.clone(), err_tx.clone());
+        let (tx2, tx3) = (tx.clone(), tx.clone());
 
         let stream = match self.sample_format {
             SampleFormat::F32 => self.device.build_input_stream(
                 &self.config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    let mono: Vec<f32> = data
-                        .chunks(source_channels)
-                        .map(|frame| frame.iter().sum::<f32>() / source_channels as f32)
-                        .collect();
-
-                    if let Ok(resampled) = resampler.process(&[mono], None) {
-                        if let Some(chunk) = resampled.first() {
-                            if tx.send(chunk.clone()).is_err() {
-                                tracing::warn!("Audio receiver dropped");
-                            }
-                        }
+                    for frame in data.chunks(source_channels) {
+                        let mono = frame.iter().sum::<f32>() / source_channels as f32;
+                        push_sample(mono, &sink, &tx);
                     }
                 },
                 move |err| {
@@ -110,50 +99,34 @@ impl AudioCapture {
             SampleFormat::I16 => self.device.build_input_stream(
                 &self.config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    let mono: Vec<f32> = data
-                        .chunks(source_channels)
-                        .map(|frame| {
+                    for frame in data.chunks(source_channels) {
+                        let mono =
                             frame.iter().map(|&s| s as f32 / i16::MAX as f32).sum::<f32>()
-                                / source_channels as f32
-                        })
-                        .collect();
-
-                    if let Ok(resampled) = resampler.process(&[mono], None) {
-                        if let Some(chunk) = resampled.first() {
-                            if tx.send(chunk.clone()).is_err() {
-                                tracing::warn!("Audio receiver dropped");
-                            }
-                        }
+                                / source_channels as f32;
+                        push_sample(mono, &sink2, &tx2);
                     }
                 },
                 move |err| {
                     tracing::error!("Audio capture error: {}", err);
-                    let _ = err_tx.send(Vec::new());
+                    let _ = err_tx2.send(Vec::new());
                 },
                 None,
             ),
             SampleFormat::U16 => self.device.build_input_stream(
                 &self.config,
                 move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                    let mono: Vec<f32> = data
-                        .chunks(source_channels)
-                        .map(|frame| {
-                            frame.iter().map(|&s| (s as f32 - 32768.0) / 32768.0).sum::<f32>()
-                                / source_channels as f32
-                        })
-                        .collect();
-
-                    if let Ok(resampled) = resampler.process(&[mono], None) {
-                        if let Some(chunk) = resampled.first() {
-                            if tx.send(chunk.clone()).is_err() {
-                                tracing::warn!("Audio receiver dropped");
-                            }
-                        }
+                    for frame in data.chunks(source_channels) {
+                        let mono = frame
+                            .iter()
+                            .map(|&s| (s as f32 - 32768.0) / 32768.0)
+                            .sum::<f32>()
+                            / source_channels as f32;
+                        push_sample(mono, &sink3, &tx3);
                     }
                 },
                 move |err| {
                     tracing::error!("Audio capture error: {}", err);
-                    let _ = err_tx.send(Vec::new());
+                    let _ = err_tx3.send(Vec::new());
                 },
                 None,
             ),
@@ -164,5 +137,98 @@ impl AudioCapture {
         stream.play().context("Failed to start audio stream")?;
 
         Ok(AudioStream { rx, _stream: stream })
+    }
+}
+
+/// Push one mono frame of raw audio into the shared resampler sink; any
+/// resampled output produced is forwarded to the receiver.
+fn push_sample(
+    sample: f32,
+    sink: &Arc<Mutex<PendingResampler>>,
+    tx: &mpsc::Sender<Vec<f32>>,
+) {
+    let mut sink = sink.lock().unwrap();
+    if let Some(chunk) = sink.push(sample) {
+        if tx.send(chunk).is_err() {
+            tracing::warn!("Audio receiver dropped");
+        }
+    }
+}
+
+/// Buffers incoming mono samples and feeds them to a fixed-input resampler in
+/// blocks, returning any resampled output for forwarding to the receiver.
+struct PendingResampler {
+    resampler: SincFixedIn<f32>,
+    pending: Vec<f32>,
+    block: usize,
+}
+
+impl PendingResampler {
+    fn new(source_rate: usize, channels: usize, block: usize) -> Result<Self> {
+        let params = SincInterpolationParameters {
+            sinc_len: 256,
+            f_cutoff: 0.95,
+            oversampling_factor: 128,
+            interpolation: SincInterpolationType::Cubic,
+            window: WindowFunction::BlackmanHarris2,
+        };
+        let resampler = SincFixedIn::<f32>::new(
+            TARGET_SAMPLE_RATE as f64 / source_rate as f64,
+            1.1,
+            params,
+            block,
+            channels,
+        )
+        .context("Failed to create resampler")?;
+        Ok(PendingResampler {
+            resampler,
+            pending: Vec::with_capacity(block),
+            block,
+        })
+    }
+
+    /// Push one mono sample; returns a resampled chunk if a full block was filled.
+    fn push(&mut self, sample: f32) -> Option<Vec<f32>> {
+        self.pending.push(sample);
+        if self.pending.len() >= self.block {
+            let input = std::mem::replace(&mut self.pending, Vec::with_capacity(self.block));
+            let resampled = self
+                .resampler
+                .process(&[input], None)
+                .ok()?;
+            resampled.into_iter().next().filter(|c| !c.is_empty())
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+    use std::time::Duration;
+
+    /// Captures a short burst of real audio from the default input device and
+    /// asserts that frames actually arrive. Run with `--ignored` since it needs
+    /// a working microphone:
+    ///     cargo test --release capture_frames -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn capture_frames() {
+        let capture = AudioCapture::new().expect("open audio");
+        let stream = capture.start_capture().expect("start audio");
+        let rx = stream.rx;
+
+        let mut total_frames = 0usize;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            while let Ok(chunk) = rx.try_recv() {
+                total_frames += chunk.len();
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        println!("captured {} frames in 3s", total_frames);
+        assert!(total_frames > 0, "no audio frames captured");
     }
 }
