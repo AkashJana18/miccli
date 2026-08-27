@@ -11,6 +11,7 @@ use crate::config;
 use crate::hotkey::HotkeyManager;
 use crate::insert;
 use crate::stt;
+use crate::vad::{SileroVad, VadEvent};
 
 pub async fn start(_foreground: bool) -> Result<()> {
     let cfg = config::load_config()?;
@@ -38,6 +39,14 @@ pub async fn start(_foreground: bool) -> Result<()> {
     );
 
     let stt_engine = stt::WhisperStt::new(&model_path, &cfg.whisper.language, cfg.whisper.metal)?;
+
+    // Initialize Silero VAD
+    let mut vad_engine = SileroVad::new(
+        cfg.vad.threshold,
+        cfg.vad.min_speech_ms,
+        cfg.vad.min_silence_ms,
+    )?;
+    tracing::info!("Silero VAD loaded, threshold={}", cfg.vad.threshold);
 
     // Set up hotkey
     let hotkey_manager = HotkeyManager::new(&cfg.hotkey.key, &cfg.hotkey.modifier, running.clone())?;
@@ -109,6 +118,47 @@ pub async fn start(_foreground: bool) -> Result<()> {
         while let Ok(chunk) = audio_rx.try_recv() {
             if is_recording {
                 audio_buffer.extend_from_slice(&chunk);
+
+                // Feed to VAD for auto-stop on silence
+                match vad_engine.process(&chunk) {
+                    Ok(VadEvent::SpeechEnd) => {
+                        tracing::info!("VAD: speech ended, auto-stopping");
+                        is_recording = false;
+
+                        if !audio_buffer.is_empty() {
+                            let start = Instant::now();
+                            let raw_text = stt_engine.transcribe(&audio_buffer)?;
+                            let transcribe_time = start.elapsed();
+
+                            if raw_text.is_empty() {
+                                tracing::info!("No speech detected");
+                                audio_buffer.clear();
+                                continue;
+                            }
+
+                            tracing::info!("Raw: \"{}\" ({:.0?})", raw_text, transcribe_time);
+
+                            let cleanup_start = Instant::now();
+                            let cleaned = cleanup::cleanup(&raw_text, &cfg.llm).await;
+                            let cleanup_time = cleanup_start.elapsed();
+                            tracing::info!("Cleaned: \"{}\" ({:.0?})", cleaned, cleanup_time);
+
+                            let insert_start = Instant::now();
+                            insert::insert_text(&cleaned, &cfg.insertion)?;
+                            let insert_time = insert_start.elapsed();
+
+                            let total = start.elapsed();
+                            println!(
+                                "\"{}\" ({:.0?} total: transcribe {:.0?} + cleanup {:.0?} + insert {:.0?})",
+                                cleaned, total, transcribe_time, cleanup_time, insert_time
+                            );
+
+                            audio_buffer.clear();
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("VAD error: {}", e),
+                }
             }
         }
 
