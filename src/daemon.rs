@@ -100,6 +100,12 @@ pub async fn start(_foreground: bool) -> Result<()> {
             }
             Some(HotkeyAction::Released) if is_recording => {
                 is_recording = false;
+                // The audio stream keeps pushing chunks into the channel while the
+                // main thread was blocked waiting for the release. Drain those now
+                // so nothing the user said during the hold is lost.
+                while let Ok(chunk) = audio_rx.try_recv() {
+                    audio_buffer.extend_from_slice(&chunk);
+                }
                 let n = audio_buffer.len();
                 println!("■ stopped ({} samples)", n);
                 let buf = std::mem::take(&mut audio_buffer);
