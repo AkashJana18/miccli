@@ -29,14 +29,6 @@ pub async fn start(_foreground: bool) -> Result<()> {
     let model_path = stt::ensure_model(&cfg.whisper.model)?;
     tracing::info!("Whisper model: {}", model_path.display());
 
-    // Initialize audio capture
-    let audio = AudioCapture::new()?;
-    tracing::info!(
-        "Audio: {}Hz, {} ch",
-        audio.sample_rate(),
-        audio.channels()
-    );
-
     let stt_engine = stt::WhisperStt::new(&model_path, &cfg.whisper.language, cfg.whisper.metal)?;
 
     // Initialize Silero VAD
@@ -59,6 +51,7 @@ pub async fn start(_foreground: bool) -> Result<()> {
 
     // Start audio capture
     let capture = AudioCapture::new()?;
+    tracing::info!("Audio: {}Hz, {} ch", capture.sample_rate(), capture.channels());
     let audio_stream = capture.start_capture()?;
     let audio_rx = audio_stream.rx;
 
@@ -94,6 +87,7 @@ pub async fn start(_foreground: bool) -> Result<()> {
                 audio_buffer.clear();
                 print!("● recording…");
                 let _ = std::io::Write::flush(&mut std::io::stdout());
+                tracing::info!("● recording started");
             }
             Some(HotkeyAction::Pressed) => {
                 // Already recording; ignore
@@ -108,6 +102,7 @@ pub async fn start(_foreground: bool) -> Result<()> {
                 }
                 let n = audio_buffer.len();
                 println!("■ stopped ({} samples)", n);
+                tracing::info!("■ recording stopped ({} samples)", n);
                 let buf = std::mem::take(&mut audio_buffer);
                 process_and_insert(&buf, &stt_engine, &cfg.llm, &cfg.insertion).await?;
             }
