@@ -72,7 +72,14 @@ pub async fn start(_foreground: bool) -> Result<()> {
                         tracing::info!("VAD: speech ended, auto-stopping");
                         let buf = std::mem::take(&mut audio_buffer);
                         is_recording = false;
-                        process_and_insert(&buf, &stt_engine, &cfg.llm, &cfg.insertion).await?;
+                        process_and_insert(
+                            &buf,
+                            cfg.vad.silence_threshold,
+                            &stt_engine,
+                            &cfg.llm,
+                            &cfg.insertion,
+                        )
+                        .await?;
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!("VAD error: {}", e),
@@ -104,7 +111,14 @@ pub async fn start(_foreground: bool) -> Result<()> {
                 println!("■ stopped ({} samples)", n);
                 tracing::info!("■ recording stopped ({} samples)", n);
                 let buf = std::mem::take(&mut audio_buffer);
-                process_and_insert(&buf, &stt_engine, &cfg.llm, &cfg.insertion).await?;
+                process_and_insert(
+                    &buf,
+                    cfg.vad.silence_threshold,
+                    &stt_engine,
+                    &cfg.llm,
+                    &cfg.insertion,
+                )
+                .await?;
             }
             Some(HotkeyAction::Released) => {
                 // Not recording
@@ -121,11 +135,20 @@ pub async fn start(_foreground: bool) -> Result<()> {
 
 async fn process_and_insert(
     buffer: &[f32],
+    silence_threshold: f32,
     stt_engine: &stt::WhisperStt,
     llm: &config::LlmConfig,
     insertion: &config::InsertionConfig,
 ) -> Result<()> {
     if buffer.is_empty() {
+        return Ok(());
+    }
+
+    // Skip pure silence / background noise so Whisper doesn't hallucinate text
+    // when nothing (or almost nothing) was spoken.
+    let peak = peak_amplitude(buffer);
+    if peak < silence_threshold {
+        tracing::info!("Silence detected (peak={:.4}<{:.4}), skipping transcription", peak, silence_threshold);
         return Ok(());
     }
 
@@ -157,6 +180,11 @@ async fn process_and_insert(
     );
 
     Ok(())
+}
+
+/// Maximum absolute sample amplitude in a buffer — used to gate out silence.
+fn peak_amplitude(buffer: &[f32]) -> f32 {
+    buffer.iter().fold(0.0f32, |m, &s| m.max(s.abs()))
 }
 
 pub fn send_signal(signal: &str) -> Result<()> {
@@ -192,4 +220,23 @@ pub fn send_signal(signal: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::peak_amplitude;
+
+    #[test]
+    fn peak_silence_is_below_threshold() {
+        let silence = vec![0.0f32, 0.0, 1e-6, 0.0, -1e-6];
+        let peak = peak_amplitude(&silence);
+        assert!(peak < 0.01, "pure silence peak should be near zero, got {}", peak);
+    }
+
+    #[test]
+    fn peak_speech_exceeds_threshold() {
+        let speech = vec![0.0f32, 0.0, 0.3, -0.2, 0.05, 0.6, -0.4];
+        let peak = peak_amplitude(&speech);
+        assert!(peak >= 0.3, "speech peak should be well above threshold, got {}", peak);
+    }
 }
