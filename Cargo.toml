@@ -19,10 +19,10 @@ maintenance = { status = "actively-developed" }
 [dependencies]
 cpal = "0.16"
 whisper-rs = "0.16"
-ort = { version = "2.0.0-rc.13", features = ["load-dynamic", "ndarray"] }
+ort = { version = "2.0.0-rc.13", features = ["ndarray", "copy-dylibs", "download-binaries", "tls-native"] }
 ndarray = "0.17"
+core-foundation = "0.9"
 rubato = "0.14"
-global-hotkey = "0.8"
 arboard = "3.6"
 reqwest = { version = "0.13", features = ["json", "stream", "blocking"] }
 tokio = { version = "1", features = ["full"] }
@@ -41,8 +41,12 @@ core-graphics = "0.25"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[profile.dev]
+rpath = true
+
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+rpath = true

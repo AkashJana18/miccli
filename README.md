@@ -11,7 +11,7 @@ Hold a hotkey, speak, release. Your voice becomes text, instantly in your termin
 - **Local Whisper STT** — no API key needed, runs offline via whisper-rs + Metal acceleration
 - **App-aware text insertion** — detects frontmost app, routes to slow char typing (TUIs) or fast clipboard paste (editors)
 - **Two-tier cleanup** — regex rules for 56+ symbols (instant), optional LLM polish via Ollama/Groq
-- **Global hotkey** — Cmd+Fn hold-to-talk (configurable)
+- **Global hotkey** — modifier-only hold-to-talk (Shift+Control by default, configurable)
 - **Model management** — download, list, remove whisper models from CLI
 
 ## Install
@@ -39,7 +39,11 @@ miccli models download small
 miccli start
 ```
 
-Hold **Cmd+Fn** (default hotkey), speak, release. Text appears in your active app.
+Hold **Shift+Control** (default hotkey), speak, release. Text appears in your active app.
+
+> **Permissions** — macOS will ask for **Microphone** access, and you must grant miccli
+> **Accessibility** (System Settings → Privacy & Security → Accessibility) so it can detect
+> the hotkey and insert text into other apps.
 
 ## Commands
 
@@ -59,8 +63,8 @@ Config lives at `~/.config/miccli/config.toml`:
 
 ```toml
 [hotkey]
-key = "Fn"
-modifier = "Command"          # Command | Option | Control | Shift
+key = ""                      # main key, or "" / "None" for modifier-only hold
+modifier = "Shift+Control"    # Command | Option | Control | Shift, joined with "+"
 
 [whisper]
 model = "small"               # tiny | base | small | medium
