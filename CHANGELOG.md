@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hotkey rewritten using a CoreGraphics event tap: supports **modifier-only hold-to-talk** (default `Shift+Control`), which the previous Carbon-based hotkey could not (the `Fn` key, and bare modifier combos, cannot be registered as Carbon global hotkeys). Requires Accessibility permission.
 - Hold-to-talk semantics: press-and-hold to record, release to transcribe (previously toggle)
 
+### Fixed
+- Mic capture was silent (always 0 samples): callbacks were fed to the fixed-input resampler at cpal's driver buffer size, which failed every `process()`. Audio is now buffered and resampled in fixed blocks (`PendingResampler`)
+- Recording no longer inserts text when nothing was said: silence/background noise is gated out before transcription (new `vad.silence_threshold` config, default `0.01`)
+
 ## [0.1.0] - 2026-08-27
 
 ### Added
