@@ -38,8 +38,6 @@ pub struct WhisperConfig {
 pub struct VadConfig {
     #[serde(default = "default_vad_threshold")]
     pub threshold: f32,
-    #[serde(default = "default_silence_threshold")]
-    pub silence_threshold: f32,
     #[serde(default = "default_min_speech_ms")]
     pub min_speech_ms: u32,
     #[serde(default = "default_min_silence_ms")]
@@ -103,13 +101,11 @@ fn default_metal() -> bool { true }
 fn default_vad() -> VadConfig {
     VadConfig {
         threshold: default_vad_threshold(),
-        silence_threshold: default_silence_threshold(),
         min_speech_ms: default_min_speech_ms(),
         min_silence_ms: default_min_silence_ms(),
     }
 }
 fn default_vad_threshold() -> f32 { 0.5 }
-fn default_silence_threshold() -> f32 { 0.01 }
 fn default_min_speech_ms() -> u32 { 250 }
 fn default_min_silence_ms() -> u32 { 500 }
 

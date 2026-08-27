@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Mic capture was silent (always 0 samples): callbacks were fed to the fixed-input resampler at cpal's driver buffer size, which failed every `process()`. Audio is now buffered and resampled in fixed blocks (`PendingResampler`)
-- Recording no longer inserts text when nothing was said: silence/background noise is gated out before transcription (new `vad.silence_threshold` config, default `0.01`)
+- Recording no longer inserts hallucinated text when nothing was said: the Silero VAD now gates transcription, so ambient noise (which Whisper would transcribe into phantom phrases like "Thank you.") is skipped unless real speech is detected
 
 ## [0.1.0] - 2026-08-27
 

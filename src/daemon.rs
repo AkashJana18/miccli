@@ -74,8 +74,8 @@ pub async fn start(_foreground: bool) -> Result<()> {
                         is_recording = false;
                         process_and_insert(
                             &buf,
-                            cfg.vad.silence_threshold,
                             &stt_engine,
+                            &mut vad_engine,
                             &cfg.llm,
                             &cfg.insertion,
                         )
@@ -113,8 +113,8 @@ pub async fn start(_foreground: bool) -> Result<()> {
                 let buf = std::mem::take(&mut audio_buffer);
                 process_and_insert(
                     &buf,
-                    cfg.vad.silence_threshold,
                     &stt_engine,
+                    &mut vad_engine,
                     &cfg.llm,
                     &cfg.insertion,
                 )
@@ -135,8 +135,8 @@ pub async fn start(_foreground: bool) -> Result<()> {
 
 async fn process_and_insert(
     buffer: &[f32],
-    silence_threshold: f32,
     stt_engine: &stt::WhisperStt,
+    vad_engine: &mut SileroVad,
     llm: &config::LlmConfig,
     insertion: &config::InsertionConfig,
 ) -> Result<()> {
@@ -144,11 +144,20 @@ async fn process_and_insert(
         return Ok(());
     }
 
-    // Skip pure silence / background noise so Whisper doesn't hallucinate text
-    // when nothing (or almost nothing) was spoken.
-    let peak = peak_amplitude(buffer);
-    if peak < silence_threshold {
-        tracing::info!("Silence detected (peak={:.4}<{:.4}), skipping transcription", peak, silence_threshold);
+    // Gate on real speech using the Silero VAD. Ambient noise can trigger Whisper
+    // to hallucinate phrases, so skip transcription/insertion unless actual speech
+    // was detected.
+    let verdict = vad_engine.contains_speech(buffer)?;
+    println!(
+        "   vad: speech={} max_prob={:.3} ({}/{} frames)",
+        verdict.has_speech, verdict.max_prob, verdict.speech_frames, verdict.total_frames
+    );
+    if !verdict.has_speech {
+        println!("   → no speech detected, no text inserted");
+        tracing::info!(
+            "No speech in buffer (max_prob={:.3}), skipping transcription",
+            verdict.max_prob
+        );
         return Ok(());
     }
 
@@ -158,6 +167,7 @@ async fn process_and_insert(
     let transcribe_time = start.elapsed();
 
     if raw_text.is_empty() {
+        println!("   → no speech detected by Whisper");
         tracing::info!("No speech detected");
         return Ok(());
     }
@@ -180,11 +190,6 @@ async fn process_and_insert(
     );
 
     Ok(())
-}
-
-/// Maximum absolute sample amplitude in a buffer — used to gate out silence.
-fn peak_amplitude(buffer: &[f32]) -> f32 {
-    buffer.iter().fold(0.0f32, |m, &s| m.max(s.abs()))
 }
 
 pub fn send_signal(signal: &str) -> Result<()> {
@@ -224,19 +229,40 @@ pub fn send_signal(signal: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::peak_amplitude;
-
+    /// Records real mic audio and runs it through both the Silero VAD and Whisper
+    /// to inspect the speech gate and STT pipeline with actual audio. Run manually:
+    ///   cargo test --release record_and_transcribe -- --ignored --nocapture
     #[test]
-    fn peak_silence_is_below_threshold() {
-        let silence = vec![0.0f32, 0.0, 1e-6, 0.0, -1e-6];
-        let peak = peak_amplitude(&silence);
-        assert!(peak < 0.01, "pure silence peak should be near zero, got {}", peak);
-    }
+    #[ignore]
+    fn record_and_transcribe() {
+        use crate::audio::AudioCapture;
+        use crate::stt;
+        use crate::vad::SileroVad;
 
-    #[test]
-    fn peak_speech_exceeds_threshold() {
-        let speech = vec![0.0f32, 0.0, 0.3, -0.2, 0.05, 0.6, -0.4];
-        let peak = peak_amplitude(&speech);
-        assert!(peak >= 0.3, "speech peak should be well above threshold, got {}", peak);
+        let audio = AudioCapture::new().expect("open audio");
+        let stream = audio.start_capture().expect("start audio");
+        let rx = stream.rx;
+
+        let mut buf: Vec<f32> = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            while let Ok(chunk) = rx.try_recv() {
+                buf.extend_from_slice(&chunk);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        println!("captured {} samples", buf.len());
+
+        let mut vad = SileroVad::new(0.5, 250, 500).expect("vad");
+        let verdict = vad.contains_speech(&buf).expect("score");
+        println!(
+            "VAD: has_speech={} max_prob={:.3} ({}/{} frames)",
+            verdict.has_speech, verdict.max_prob, verdict.speech_frames, verdict.total_frames
+        );
+
+        let model = stt::ensure_model("small").expect("model");
+        let engine = stt::WhisperStt::new(&model, "en", false).expect("stt");
+        let text = engine.transcribe(&buf).expect("transcribe");
+        println!("TRANSCRIBED: \"{}\"", text);
     }
 }

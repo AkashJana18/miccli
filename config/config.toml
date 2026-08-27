@@ -9,7 +9,6 @@ metal = true
 
 [vad]
 threshold = 0.5
-silence_threshold = 0.01   # skip transcription when peak sample amplitude is below this
 min_speech_ms = 250
 min_silence_ms = 500
 

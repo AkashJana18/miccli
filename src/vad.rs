@@ -108,6 +108,34 @@ impl SileroVad {
         Ok(event)
     }
 
+    /// Scores a whole buffer of 16kHz mono audio from scratch and reports whether
+    /// any frame was classified as speech (probability >= threshold). This is used
+    /// to distinguish real speech from ambient noise, which would otherwise
+    /// trigger Whisper hallucination.
+    pub fn contains_speech(&mut self, audio: &[f32]) -> Result<SpeechVerdict> {
+        self.reset();
+        let mut max_prob: f32 = 0.0;
+        let mut speech_frames: usize = 0;
+        let mut total_frames: usize = 0;
+        for chunk in audio.chunks(CHUNK_SIZE) {
+            if chunk.len() < CHUNK_SIZE {
+                break;
+            }
+            total_frames += 1;
+            let prob = self.process_chunk(chunk)?;
+            if prob >= self.threshold {
+                speech_frames += 1;
+            }
+            max_prob = max_prob.max(prob);
+        }
+        Ok(SpeechVerdict {
+            max_prob,
+            speech_frames,
+            total_frames,
+            has_speech: speech_frames > 0,
+        })
+    }
+
     fn process_chunk(&mut self, chunk: &[f32]) -> Result<f32> {
         debug_assert_eq!(chunk.len(), CHUNK_SIZE);
 
@@ -174,6 +202,15 @@ pub enum VadEvent {
     None,
     SpeechStart,
     SpeechEnd,
+}
+
+/// Result of scoring a whole audio buffer for speech.
+#[derive(Debug)]
+pub struct SpeechVerdict {
+    pub max_prob: f32,
+    pub speech_frames: usize,
+    pub total_frames: usize,
+    pub has_speech: bool,
 }
 
 #[cfg(test)]
