@@ -2,13 +2,12 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::audio::AudioCapture;
 use crate::cleanup;
 use crate::config;
-use crate::hotkey::HotkeyManager;
+use crate::hotkey::{HotkeyAction, HotkeyManager};
 use crate::insert;
 use crate::stt;
 use crate::vad::{SileroVad, VadEvent};
@@ -43,17 +42,16 @@ pub async fn start(_foreground: bool) -> Result<()> {
     // Set up hotkey
     let hotkey_manager = HotkeyManager::new(&cfg.hotkey.key, &cfg.hotkey.modifier, running.clone())?;
 
-    println!("miccli listening... Hold {}+{} to talk", cfg.hotkey.modifier, cfg.hotkey.key);
+    println!("miccli is running. Hold {} to talk, release to insert text.", hotkey_manager.combo());
     println!("   Press Ctrl+C to quit");
+    println!("   ● appears while recording, ■ when stopped.");
     println!();
+    // Keep status lines visible even when stdout is redirected.
+    let _ = std::io::Write::flush(&mut std::io::stdout());
 
     // Start audio capture
     let capture = AudioCapture::new()?;
-    tracing::info!(
-        "Audio: {}Hz, {} ch",
-        capture.sample_rate(),
-        capture.channels()
-    );
+    tracing::info!("Audio: {}Hz, {} ch", capture.sample_rate(), capture.channels());
     let audio_stream = capture.start_capture()?;
     let audio_rx = audio_stream.rx;
 
@@ -61,57 +59,9 @@ pub async fn start(_foreground: bool) -> Result<()> {
     let mut is_recording = false;
     let mut audio_buffer: Vec<f32> = Vec::new();
 
-    // Main event loop
+    // Main hold-to-talk loop
     while running.load(Ordering::Relaxed) {
-        // Check for hotkey press
-        if hotkey_manager.wait_for_press() {
-            if is_recording {
-                // Stop recording — process what we have
-                is_recording = false;
-                tracing::info!("Recording stopped ({} samples)", audio_buffer.len());
-
-                if !audio_buffer.is_empty() {
-                    let start = Instant::now();
-
-                    // Transcribe
-                    let raw_text = stt_engine.transcribe(&audio_buffer)?;
-                    let transcribe_time = start.elapsed();
-
-                    if raw_text.is_empty() {
-                        tracing::info!("No speech detected");
-                        continue;
-                    }
-
-                    tracing::info!("Raw: \"{}\" ({:.0?})", raw_text, transcribe_time);
-
-                    // LLM cleanup (async call in sync context)
-                    let cleanup_start = Instant::now();
-                    let cleaned = cleanup::cleanup(&raw_text, &cfg.llm).await;
-                    let cleanup_time = cleanup_start.elapsed();
-                    tracing::info!("Cleaned: \"{}\" ({:.0?})", cleaned, cleanup_time);
-
-                    // Insert text
-                    let insert_start = Instant::now();
-                    insert::insert_text(&cleaned, &cfg.insertion)?;
-                    let insert_time = insert_start.elapsed();
-
-                    let total = start.elapsed();
-                    println!(
-                        "\"{}\" ({:.0?} total: transcribe {:.0?} + cleanup {:.0?} + insert {:.0?})",
-                        cleaned, total, transcribe_time, cleanup_time, insert_time
-                    );
-
-                    audio_buffer.clear();
-                }
-            } else {
-                // Start recording
-                is_recording = true;
-                audio_buffer.clear();
-                tracing::info!("Recording started...");
-            }
-        }
-
-        // Drain any pending audio into buffer
+        // Drain any pending audio into the recording buffer
         while let Ok(chunk) = audio_rx.try_recv() {
             if is_recording {
                 audio_buffer.extend_from_slice(&chunk);
@@ -120,38 +70,9 @@ pub async fn start(_foreground: bool) -> Result<()> {
                 match vad_engine.process(&chunk) {
                     Ok(VadEvent::SpeechEnd) => {
                         tracing::info!("VAD: speech ended, auto-stopping");
+                        let buf = std::mem::take(&mut audio_buffer);
                         is_recording = false;
-
-                        if !audio_buffer.is_empty() {
-                            let start = Instant::now();
-                            let raw_text = stt_engine.transcribe(&audio_buffer)?;
-                            let transcribe_time = start.elapsed();
-
-                            if raw_text.is_empty() {
-                                tracing::info!("No speech detected");
-                                audio_buffer.clear();
-                                continue;
-                            }
-
-                            tracing::info!("Raw: \"{}\" ({:.0?})", raw_text, transcribe_time);
-
-                            let cleanup_start = Instant::now();
-                            let cleaned = cleanup::cleanup(&raw_text, &cfg.llm).await;
-                            let cleanup_time = cleanup_start.elapsed();
-                            tracing::info!("Cleaned: \"{}\" ({:.0?})", cleaned, cleanup_time);
-
-                            let insert_start = Instant::now();
-                            insert::insert_text(&cleaned, &cfg.insertion)?;
-                            let insert_time = insert_start.elapsed();
-
-                            let total = start.elapsed();
-                            println!(
-                                "\"{}\" ({:.0?} total: transcribe {:.0?} + cleanup {:.0?} + insert {:.0?})",
-                                cleaned, total, transcribe_time, cleanup_time, insert_time
-                            );
-
-                            audio_buffer.clear();
-                        }
+                        process_and_insert(&buf, &stt_engine, &cfg.llm, &cfg.insertion).await?;
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!("VAD error: {}", e),
@@ -159,12 +80,82 @@ pub async fn start(_foreground: bool) -> Result<()> {
             }
         }
 
-        thread::sleep(Duration::from_millis(5));
+        // Handle hotkey press/release (hold-to-talk)
+        match hotkey_manager.wait_for_action() {
+            Some(HotkeyAction::Pressed) if !is_recording => {
+                is_recording = true;
+                audio_buffer.clear();
+                print!("● recording…");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                tracing::info!("● recording started");
+            }
+            Some(HotkeyAction::Pressed) => {
+                // Already recording; ignore
+            }
+            Some(HotkeyAction::Released) if is_recording => {
+                is_recording = false;
+                // The audio stream keeps pushing chunks into the channel while the
+                // main thread was blocked waiting for the release. Drain those now
+                // so nothing the user said during the hold is lost.
+                while let Ok(chunk) = audio_rx.try_recv() {
+                    audio_buffer.extend_from_slice(&chunk);
+                }
+                let n = audio_buffer.len();
+                println!("■ stopped ({} samples)", n);
+                tracing::info!("■ recording stopped ({} samples)", n);
+                let buf = std::mem::take(&mut audio_buffer);
+                process_and_insert(&buf, &stt_engine, &cfg.llm, &cfg.insertion).await?;
+            }
+            Some(HotkeyAction::Released) => {
+                // Not recording
+            }
+            None => break,
+        }
     }
 
-    hotkey_manager.unregister()?;
+    hotkey_manager.stop();
     let _ = fs::remove_file(&pid_file);
     println!("miccli stopped.");
+    Ok(())
+}
+
+async fn process_and_insert(
+    buffer: &[f32],
+    stt_engine: &stt::WhisperStt,
+    llm: &config::LlmConfig,
+    insertion: &config::InsertionConfig,
+) -> Result<()> {
+    if buffer.is_empty() {
+        return Ok(());
+    }
+
+    let start = Instant::now();
+
+    let raw_text = stt_engine.transcribe(buffer)?;
+    let transcribe_time = start.elapsed();
+
+    if raw_text.is_empty() {
+        tracing::info!("No speech detected");
+        return Ok(());
+    }
+
+    tracing::info!("Raw: \"{}\" ({:.0?})", raw_text, transcribe_time);
+
+    let cleanup_start = Instant::now();
+    let cleaned = cleanup::cleanup(&raw_text, llm).await;
+    let cleanup_time = cleanup_start.elapsed();
+    tracing::info!("Cleaned: \"{}\" ({:.0?})", cleaned, cleanup_time);
+
+    let insert_start = Instant::now();
+    insert::insert_text(&cleaned, insertion)?;
+    let insert_time = insert_start.elapsed();
+
+    let total = start.elapsed();
+    println!(
+        "\"{}\" ({:.0?} total: transcribe {:.0?} + cleanup {:.0?} + insert {:.0?})",
+        cleaned, total, transcribe_time, cleanup_time, insert_time
+    );
+
     Ok(())
 }
 

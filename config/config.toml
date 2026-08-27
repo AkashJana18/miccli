@@ -1,6 +1,6 @@
 [hotkey]
-key = "Fn"
-modifier = "Command"
+key = ""                     # main key; leave empty ("" or "None") for modifier-only hold
+modifier = "Shift+Control"    # Command | Option | Control | Shift, combined with "+"
 
 [whisper]
 model = "small"

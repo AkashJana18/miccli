@@ -84,8 +84,8 @@ fn default_hotkey() -> HotkeyConfig {
         modifier: default_hotkey_modifier(),
     }
 }
-fn default_hotkey_key() -> String { "Fn".into() }
-fn default_hotkey_modifier() -> String { "Command".into() }
+fn default_hotkey_key() -> String { "".into() }
+fn default_hotkey_modifier() -> String { "Shift+Control".into() }
 
 fn default_whisper() -> WhisperConfig {
     WhisperConfig {
@@ -183,8 +183,8 @@ mod tests {
     #[test]
     fn test_empty_toml_uses_defaults() {
         let config: Config = toml::from_str("").unwrap();
-        assert_eq!(config.hotkey.key, "Fn");
-        assert_eq!(config.hotkey.modifier, "Command");
+        assert_eq!(config.hotkey.key, "");
+        assert_eq!(config.hotkey.modifier, "Shift+Control");
         assert_eq!(config.whisper.model, "small");
         assert_eq!(config.whisper.language, "en");
         assert_eq!(config.llm.provider, "ollama");
@@ -200,7 +200,7 @@ key = "F5"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.hotkey.key, "F5");
-        assert_eq!(config.hotkey.modifier, "Command");
+        assert_eq!(config.hotkey.modifier, "Shift+Control");
         assert_eq!(config.whisper.model, "small");
     }
 
@@ -252,8 +252,8 @@ strategy = "paste"
     #[test]
     fn test_default_hotkey_values() {
         let config = Config::default();
-        assert_eq!(config.hotkey.key, "Fn");
-        assert_eq!(config.hotkey.modifier, "Command");
+        assert_eq!(config.hotkey.key, "");
+        assert_eq!(config.hotkey.modifier, "Shift+Control");
     }
 
     #[test]
