@@ -102,12 +102,3 @@ fn download_whisper_model(name: &str, path: &Path) -> Result<()> {
 
     Ok(())
 }
-
-pub fn list_models() -> Vec<(&'static str, &'static str, bool)> {
-    vec![
-        ("tiny", "75 MB - Fastest, lowest accuracy", false),
-        ("base", "142 MB - Good balance", false),
-        ("small", "466 MB - Best for dictation (recommended)", true),
-        ("medium", "1.5 GB - High accuracy, slower", false),
-    ]
-}
