@@ -133,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn testIDES_use_paste() {
+    fn test_ides_use_paste() {
         assert_eq!(classify_app("com.microsoft.VSCode"), InsertStrategy::Paste);
         assert_eq!(classify_app("com.jetbrains.intellij"), InsertStrategy::Paste);
         assert_eq!(classify_app("com.jetbrains.rustrover"), InsertStrategy::Paste);

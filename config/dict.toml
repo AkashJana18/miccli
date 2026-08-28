@@ -1,9 +1,0 @@
-[context]
-active_language = "rust"
-
-[context.vocab]
-"Jason" = "JSON"
-"SEQ el" = "SQL"
-"arr" = "[]"
-"hash map" = "HashMap{}"
-"crate" = "crate"
