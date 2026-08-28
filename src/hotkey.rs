@@ -51,11 +51,18 @@ impl HotkeyManager {
     }
 
     /// Blocks until the next hotkey event, returning the action.
-    pub fn wait_for_action(&self) -> Option<HotkeyAction> {
-        match self.rx.recv_timeout(std::time::Duration::from_millis(50)) {
-            Ok(action) => Some(action),
-            Err(mpsc::RecvTimeoutError::Disconnected) => None,
-            Err(mpsc::RecvTimeoutError::Timeout) => Some(HotkeyAction::Released),
+    /// Waits briefly for the next hotkey action.
+    ///
+    /// - `Ok(Some(action))` — a real press/release event occurred.
+    /// - `Ok(None)` — timed out with no event (caller should do other work and
+    ///   call again; this must NOT be treated as a release, since the user may
+    ///   still be holding the combo).
+    /// - `Err(())` — the hotkey thread disconnected; caller should stop.
+    pub fn wait_for_action(&self) -> Result<Option<HotkeyAction>, ()> {
+        match self.rx.recv_timeout(std::time::Duration::from_millis(25)) {
+            Ok(action) => Ok(Some(action)),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(()),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
         }
     }
 

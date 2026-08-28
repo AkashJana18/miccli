@@ -88,18 +88,22 @@ pub async fn start(_foreground: bool) -> Result<()> {
         }
 
         // Handle hotkey press/release (hold-to-talk)
+        //
+        // `Ok(None)` means no hotkey event arrived this poll — this is NOT a
+        // release. We keep draining audio so a long hold records continuously
+        // instead of stopping after one ~50ms poll.
         match hotkey_manager.wait_for_action() {
-            Some(HotkeyAction::Pressed) if !is_recording => {
+            Ok(Some(HotkeyAction::Pressed)) if !is_recording => {
                 is_recording = true;
                 audio_buffer.clear();
                 print!("● recording…");
                 let _ = std::io::Write::flush(&mut std::io::stdout());
                 tracing::info!("● recording started");
             }
-            Some(HotkeyAction::Pressed) => {
+            Ok(Some(HotkeyAction::Pressed)) => {
                 // Already recording; ignore
             }
-            Some(HotkeyAction::Released) if is_recording => {
+            Ok(Some(HotkeyAction::Released)) if is_recording => {
                 is_recording = false;
                 // The audio stream keeps pushing chunks into the channel while the
                 // main thread was blocked waiting for the release. Drain those now
@@ -120,10 +124,13 @@ pub async fn start(_foreground: bool) -> Result<()> {
                 )
                 .await?;
             }
-            Some(HotkeyAction::Released) => {
+            Ok(Some(HotkeyAction::Released)) => {
                 // Not recording
             }
-            None => break,
+            Ok(None) => {
+                // No hotkey event this poll; nothing to do, continue loop.
+            }
+            Err(()) => break,
         }
     }
 
