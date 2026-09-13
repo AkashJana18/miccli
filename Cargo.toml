@@ -1,6 +1,6 @@
 [package]
 name = "miccli"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 rust-version = "1.75"
 authors = ["miccli contributors"]
@@ -39,6 +39,10 @@ crossterm = "0.28"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
+cocoa = "0.25"
+objc = "0.2"
+dispatch = "0.2"
+once_cell = "1.19"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -5,6 +5,7 @@ mod daemon;
 mod hotkey;
 mod insert;
 mod models;
+mod overlay;
 mod stt;
 mod tui;
 mod vad;
@@ -71,8 +72,31 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Start => {
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(daemon::start())
+            #[cfg(target_os = "macos")]
+            {
+                // Keep main thread for Cocoa overlay (global floating window visible on opencode/other terminals).
+                // Run daemon on background thread, main thread services CFRunLoop for overlay + hotkey.
+                let handle = std::thread::spawn(|| {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(daemon::start())
+                });
+                // Main RunLoop — services overlay window and keeps dock icon hidden (Accessory).
+                // This loop exits when the daemon thread finishes (e.g., after `miccli stop`).
+                use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
+                use std::time::Duration;
+                while !handle.is_finished() {
+                    unsafe {
+                        CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, Duration::from_millis(50), false);
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                return handle.join().unwrap();
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let rt = tokio::runtime::Runtime::new()?;
+                return rt.block_on(daemon::start());
+            }
         }
         Commands::Dashboard => {
             let rt = tokio::runtime::Runtime::new()?;

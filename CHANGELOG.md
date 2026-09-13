@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-13
+
+### Fixed
+- **Overlay not visible on opencode / other terminals** — the whisperflow overlay was a terminal alt-screen confined to the daemon's own tty, so it never appeared when `opencode` or another terminal was frontmost. Now uses a **native floating HUD window** (`src/overlay.rs`, `cocoa` `NSWindow` `NSBorderlessWindowMask` at level `1000` with `orderFrontRegardless`, centered top, 560×78, dark translucent, rounded, `setCollectionBehavior canJoinAllSpaces`). Visible on every Space/app, like WhisperFlow. Falls back to terminal overlay when not on macOS or window creation fails.
+  - `overlay::spawn()` now creates the `NSWindow` on the main queue (`dispatch::Queue::main().exec_async` + `mpsc` sync, `OnceLock<WindowState>`) and updates via `exec_async` (`do_show`/`do_hide`/`do_waveform` etc.), so it is globally visible even when `opencode` is frontmost.
+  - `src/daemon.rs:run_overlay_loop` now prefers `native_overlay` (`overlay::spawn()`) and falls back to `term_overlay` (`tui::init_overlay_terminal`) — waveform (48 blocks), transcription and status are sent to whichever is available. Idle still blank (no alt-screen).
+  - `src/main.rs:Commands::Start` now keeps the main thread's `CFRunLoop` alive (`CFRunLoop::run_in_mode` 50 ms loop) while the daemon runs on a background thread, so the main-queue overlay window is serviced (previously `tokio::Runtime::block_on` blocked main, so `exec_async` to main never ran).
+  - Added `cocoa = "0.25"`, `objc = "0.2"`, `dispatch = "0.2"`, `once_cell = "1.19"` under `[target.'cfg(target_os = "macos")'.dependencies]` (`Cargo.toml`).
+
+### Changed
+- Bumped `Cargo.toml` `0.3.0` → `0.3.1`.
+
 ## [0.3.0] - 2026-09-13
 
 ### Added
@@ -67,7 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Energy-based VAD placeholder (Silero integration planned)
 - MCP server subcommand (planned)
 
-[Unreleased]: https://github.com/AkashJana18/miccli/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/AkashJana18/miccli/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/AkashJana18/miccli/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/AkashJana18/miccli/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/AkashJana18/miccli/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/AkashJana18/miccli/releases/tag/v0.1.0
