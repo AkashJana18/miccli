@@ -66,6 +66,15 @@ impl HotkeyManager {
         }
     }
 
+    /// Non-blocking poll — returns immediately. Use inside TUI loop to avoid blocking render.
+    pub fn try_action(&self) -> Result<Option<HotkeyAction>, ()> {
+        match self.rx.try_recv() {
+            Ok(action) => Ok(Some(action)),
+            Err(mpsc::TryRecvError::Disconnected) => Err(()),
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+        }
+    }
+
     pub fn combo(&self) -> &str {
         &self.combo
     }
