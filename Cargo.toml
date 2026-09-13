@@ -1,6 +1,6 @@
 [package]
 name = "miccli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["miccli contributors"]
@@ -34,6 +34,8 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "5"
+ratatui = "0.29"
+crossterm = "0.28"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"

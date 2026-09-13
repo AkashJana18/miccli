@@ -6,6 +6,7 @@ mod hotkey;
 mod insert;
 mod models;
 mod stt;
+mod tui;
 mod vad;
 
 use anyhow::Result;
@@ -20,11 +21,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the voice dictation daemon
+    /// Start the voice dictation daemon (TUI by default)
     Start {
-        /// Run in foreground (no background)
+        /// Run in foreground (no background daemon)
         #[arg(long)]
         foreground: bool,
+        /// Disable TUI and use plain log output
+        #[arg(long)]
+        no_tui: bool,
     },
     /// Toggle recording on/off (sends signal to running daemon)
     Toggle,
@@ -71,9 +75,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Start { foreground } => {
+        Commands::Start { foreground, no_tui } => {
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(daemon::start(foreground))
+            rt.block_on(daemon::start(foreground, no_tui))
         }
         Commands::Toggle => daemon::send_signal("toggle"),
         Commands::Stop => daemon::send_signal("stop"),
