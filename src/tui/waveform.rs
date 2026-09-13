@@ -97,6 +97,7 @@ pub fn waveform_to_blocks(data: &[u64], width: usize) -> String {
 }
 
 /// Convert a chunk of f32 samples (-1.0..1.0) into a 0..100 level.
+/// Tuned so normal speech (rms 0.03, peak 0.3) hits mid-high blocks, not a flat line.
 pub fn chunk_to_level(chunk: &[f32]) -> u64 {
     if chunk.is_empty() {
         return 0;
@@ -111,17 +112,16 @@ pub fn chunk_to_level(chunk: &[f32]) -> u64 {
         sum_sq += s * s;
     }
     let rms = (sum_sq / chunk.len() as f32).sqrt();
-    // RMS is more stable, peak gives attack. Blend heavily toward peak for visual punch
-    // but keep RMS to avoid flicker on transients.
-    // Empirically: speech rms 0.02..0.08, peak 0.2..0.6
-    let rms_part = (rms * 420.0).clamp(0.0, 70.0);
-    let peak_part = (peak * 95.0).clamp(0.0, 100.0);
-    let level = rms_part * 0.45 + peak_part * 0.55;
-    // Small gate: below ~1% treat as silence to keep line flat
-    if level < 2.5 {
+    // Boosted: speech rms 0.02..0.08 → 18..72, peak 0.2..0.6 → 28..84
+    // Blend 30/70 and add gain + floor so moderate speech hits ▆/▇, not ▂
+    let rms_part = (rms * 900.0).clamp(0.0, 90.0);
+    let peak_part = (peak * 140.0).clamp(0.0, 100.0);
+    let mut level = rms_part * 0.30 + peak_part * 0.70;
+    level = (level * 1.35 + 8.0).clamp(0.0, 100.0);
+    if level < 10.0 {
         0
     } else {
-        level.clamp(0.0, 100.0) as u64
+        level as u64
     }
 }
 
