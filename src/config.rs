@@ -14,6 +14,8 @@ pub struct Config {
     pub llm: LlmConfig,
     #[serde(default = "default_insertion")]
     pub insertion: InsertionConfig,
+    #[serde(default = "default_tui")]
+    pub tui: TuiConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -76,6 +78,21 @@ pub struct InsertionConfig {
 pub struct AppOverride {
     pub bundle_id: String,
     pub strategy: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TuiConfig {
+    #[serde(default = "default_tui_mode")]
+    pub mode: String,
+}
+
+fn default_tui() -> TuiConfig {
+    TuiConfig {
+        mode: default_tui_mode(),
+    }
+}
+fn default_tui_mode() -> String {
+    "overlay".into()
 }
 
 fn default_hotkey() -> HotkeyConfig {
@@ -149,6 +166,7 @@ impl Default for Config {
                 enabled: default_true(),
             },
             insertion: default_insertion(),
+            tui: default_tui(),
         }
     }
 }
@@ -261,5 +279,15 @@ strategy = "paste"
         let config = Config::default();
         assert_eq!(config.whisper.model, "small");
         assert_eq!(config.vad.threshold, 0.5);
+    }
+
+    #[test]
+    fn test_default_tui_mode() {
+        let config = Config::default();
+        assert_eq!(config.tui.mode, "overlay");
+        let parsed: Config = toml::from_str("[tui]\nmode = \"dashboard\"").unwrap();
+        assert_eq!(parsed.tui.mode, "dashboard");
+        let parsed_none: Config = toml::from_str("[tui]\nmode = \"none\"").unwrap();
+        assert_eq!(parsed_none.tui.mode, "none");
     }
 }

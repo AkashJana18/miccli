@@ -2,18 +2,20 @@
 
 Terminal voice dictation CLI — local Whisper STT + code-aware cleanup + smart text insertion.
 
-Hold a hotkey, speak, release. Your voice becomes text, instantly in your terminal. Now with a live **ratatui TUI** — waveform, transcription preview, and model management in your terminal.
+Hold a hotkey, speak, release. Your voice becomes text, instantly in your terminal. **Overlay appears only while recording** like WhisperFlow — terminal stays blank when idle.
 
 **Why miccli exists:** Claude Code, Codex, and opencode collapse pasted multi-line text into `[Pasted text]`. miccli detects this and types character-by-character instead, so everything arrives intact. It works in every nested terminal CLI (opencode, nvim, etc.) because terminal emulators are classified as `type` (see below).
 
 ## Features
 
-- **Live TUI (ratatui)** — `miccli start` shows a dashboard by default: waveform sparkline, live transcription, latencies, and insertion target; tabs for Models/Config/Help; `q`/`Tab`/`1-4` navigation; `--no-tui` falls back to plain logs (still <2 MB overhead, 24 MB release)
+- **WhisperFlow overlay (ratatui)** — `miccli start` is blank when idle; hold `Shift+Control` → small top bar with live waveform (blocks `▁▂▃▄▅▆▇█`) and transcription appears, auto-hides on release. No `q` needed while coding.
+- **Full dashboard** — `miccli dashboard` stops the daemon, opens the 4-tab TUI (Live waveform sparkline, Models, Config, Help), `q` to quit and auto-restarts the overlay daemon. Both modes coexist.
 - **Local Whisper STT** — no API key needed, runs offline via whisper-rs + Metal acceleration
 - **App-aware text insertion** — detects frontmost app, routes to slow char typing (TUIs) or fast clipboard paste (editors)
 - **Two-tier cleanup** — regex rules for 56+ symbols (instant), optional LLM polish via Ollama/Groq
-- **Global hotkey** — modifier-only hold-to-talk (Shift+Control by default, configurable via `CGEventTap`, non-blocking)
-- **Model management** — download, list, remove whisper models from CLI or TUI
+- **Global hotkey** — modifier-only hold-to-talk (Shift+Control by default, `CGEventTap`, non-blocking)
+- **Pause toggle** — `miccli toggle` pauses/resumes dictation (SIGUSR1)
+- **Model management** — download, list, remove whisper models from CLI or dashboard
 
 ## Install
 
@@ -36,57 +38,91 @@ cargo build --release
 # Download a whisper model (first time only)
 miccli models download small
 
-# Start listening (TUI by default)
+# Start overlay daemon (blank when idle, overlay on hotkey)
 miccli start
-# ↳ Live tab shows waveform + transcription; hold Shift+Control, speak, release
+# ↳ hold Shift+Control, speak, release — overlay shows waveform + result, then hides
 
-# Plain log mode (no TUI, e.g. inside a nested TUI you want to dictate into)
-miccli start --no-tui
+# Full dashboard for config/model management
+miccli dashboard
+# ↳ 4 tabs: Live / Models / Config / Help — q to quit and daemon restarts
+
+# Pause / resume without stopping
+miccli toggle
 ```
 
-Hold **Shift+Control** (default hotkey), speak, release. Text appears in your active app. Use `Tab`/`1-4` to switch tabs, `q` or `Ctrl+C` to quit. The hotkey is global — it works even when the TUI has focus, so run miccli in a **separate pane/window** from the app you dictate into.
+Hold **Shift+Control** (default hotkey), speak, release. Text appears in your active app. The hotkey is global — it works even when the overlay terminal is in the background, so run `miccli start` in a **separate pane/window** from the app you dictate into (e.g. `opencode`, `nvim`).
 
 > **Permissions** — macOS will ask for **Microphone** access, and you must grant miccli
 > **Accessibility** (System Settings → Privacy & Security → Accessibility) so it can detect
 > the hotkey and insert text into other apps. Without it the hotkey won't fire (`TapDisabledByUserInput`).
 
-## TUI
+## TUI Modes
 
-`miccli start` launches `ratatui` with `crossterm` (enabled by default, auto-detects TTY; falls back when `stdout` is not a terminal or with `--no-tui`).
+### Overlay (default — whisperflow)
+
+`miccli start` with `[tui] mode = "overlay"` (default). Terminal is **completely blank when idle** — no rendering, no clear, primary screen unchanged. On `Shift+Control` press:
 
 ```
-┌ miccli — voice dictation ────────────────────────────────────  ◉ miccli v0.2.0  ● REC  Shift+Control ─┐
-│ ◐ auto  dev.opencode  ● model ready                                                              │
-├──────────────────────────────────────────────────────────────────────────────────────────────────┤
-│  ◉ Live    │  ◈ Models    │  ⚙ Config    │  ? Help                                              │
-├──────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ waveform — ● recording  48210 samples  peak 68%   (sparkline, cyan→yellow→red by amplitude)      │
-│ transcription — listening…  "open curly brace hello world close curly brace."                    │
-│ pipeline  transcribe  820ms  cleanup 120ms  insert 30ms  total 970ms  │ insertion  ⌨ type 20ms/char│
-├──────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ q quit  tab switch  1-4 jump  ⇧^ hold talk │ live: waveform + transcript │ miccli v0.2.0  •  ● REC │
-└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─ miccli ● REC  Shift+Control  dev.opencode  ⌨ type ──────────────┐
+│ ███▓▓▓█▓▓▓▓█▓▓▓▓▓█▓▓▓█▓▓  68%                                  │
+│ "open curly brace function fetch close curly brace"               │
+│ ··· 970ms total · typing into opencode ·                          │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+- Top-aligned, ~6 lines, rounded border, pulsing `● REC` / `■ IDLE`, single-line blocks waveform (RMS+peak `0..100`, color cyan→yellow→red), live transcription, latency/status.
+- Auto-hides ~1.4 s after release (shows result briefly). No `q` needed.
+- When `paused` (`miccli toggle`), shows `⏸ paused` and ignores hotkey until toggled again.
+- CPU: `50 ms` sleep when idle (~20 Hz, ~0.1% CPU), `12 ms` when recording (~80 Hz) — same as before, foreground vs background identical (daemon work dominates). Memory ~24 MB.
+
+### Dashboard (full)
+
+`miccli dashboard` — stops the running daemon (if any), opens full 4-tab TUI, `q` to quit and daemon auto-restarts (same terminal becomes overlay daemon).
+
+```
+┌ miccli — voice dictation ───────────────────  ◉ miccli v0.3.0  ● REC  Shift+Control ─┐
+│ ◐ auto  dev.opencode  ● model ready                                                     │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│  ◉ Live    │  ◈ Models    │  ⚙ Config    │  ? Help                                     │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ waveform — ● recording  48210 samples  peak 68%  (sparkline, cyan→yellow→red)             │
+│ transcription — listening…  "open curly brace hello world close curly brace."           │
+│ pipeline  transcribe  820ms  cleanup 120ms  insert 30ms  total 970ms │ insertion ⌨ type  │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ q quit  tab switch  1-4 jump  ⇧^ hold talk │ live: waveform + transcript │ v0.3.0 ● REC  │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Tabs:**
-- **Live** — waveform (RMS+peak blended `0..100`, decay-gated, width 60–220 cols), transcription (cleaned + raw), `● REC`/`■ idle` pulsing, `app_name` + `strategy`, latencies, VAD status.
-- **Models** — table `tiny 75 MB`/`base 142 MB`/`small 466 MB`/`medium 1.5 GB` with `✅ downloaded`/`○ not` and `▶` active marker; `miccli models download <name>` to fetch.
-- **Config** — highlighted `~/.config/miccli/config.toml` (`[sections]` magenta, keys cyan).
-- **Help** — keys, insertion explainer, and permission checklist.
+- **Live** — sparkline waveform (60–220 cols), transcription (cleaned + raw), `app_name` + `strategy`, latencies, VAD status.
+- **Models** — table `tiny 75 MB`/`base 142 MB`/`small 466 MB`/`medium 1.5 GB` with `✅`/`○` and `▶`.
+- **Config** — highlighted `~/.config/miccli/config.toml`.
+- **Help** — keys, insertion explainer, permission checklist.
 
-**Keys:** `q`/`Esc`/`Ctrl+C` quit · `Tab`/`Shift+Tab` next/prev · `1` `2` `3` `4` jump. Runs at 30 fps idle / 80 fps recording (`tokio::time::sleep`, non-blocking `HotkeyManager::try_action`).
+**Keys (dashboard only):** `q`/`Esc`/`Ctrl+C` quit · `Tab`/`Shift+Tab` next/prev · `1` `2` `3` `4` jump. Runs at 30 fps idle / 80 fps recording.
+
+### `tui.mode` config
+
+```toml
+[tui]
+mode = "overlay"   # overlay | dashboard | none
+# overlay — minimal top bar only while recording (default)
+# dashboard — persistent 4-tab when `miccli start` (or just use `miccli dashboard`)
+# none — plain logs (`● recording…` / `■ stopped`) even when TTY
+```
+Automatically falls back to plain when `stdout` is not a TTY.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `miccli start` | Start daemon with TUI (default) — `Shift+Control` hold to talk; `q` quit |
-| `miccli start --no-tui` | Start daemon with plain log output (`● recording…` / `■ stopped`) |
-| `miccli stop` | Stop daemon (removes `~/.config/miccli/miccli.pid`) |
-| `miccli toggle` | Toggle recording on/off (sends `SIGUSR1`) |
+| `miccli start` | Start overlay daemon (blank idle, whisperflow on hotkey) |
+| `miccli dashboard` | Stop daemon → open full dashboard → `q` → daemon restarts |
+| `miccli toggle` | Pause/resume daemon (⏸, `SIGUSR1`) |
+| `miccli stop` | Stop daemon (`SIGTERM`, removes pid) |
 | `miccli config` | Show config path, hint to edit |
 | `miccli config --path` | Print config path only |
-| `miccli models` | List/download/remove whisper models (also visible in TUI Models tab) |
+| `miccli models` | List/download/remove whisper models (also in dashboard) |
 | `miccli models download <size>` | Download a model (tiny/base/small/medium) |
 | `miccli models list` | List installed models |
 
@@ -119,6 +155,9 @@ default = "auto"              # auto | type | clipboard
 key_delay_ms = 20             # Delay between keystrokes (type mode)
 paste_delay_ms = 10
 restore_clipboard = true      # Restore clipboard after paste
+
+[tui]
+mode = "overlay"              # overlay | dashboard | none
 ```
 
 ### App overrides
@@ -141,9 +180,9 @@ miccli solves the `[Pasted text]` collapse problem in terminal TUIs:
 | Claude Code, opencode, Codex | **Type** (20ms/char) | Electron TUIs have same issue |
 | VS Code, IntelliJ, Sublime | **Paste** (clipboard) | Full paste support |
 
-The `auto` mode (default) detects the frontmost app via `osascript` and picks the right strategy (`src/insert/mod.rs`, `src/insert/app_detect.rs`). You can override per-app in config, or force a global strategy. Because every terminal emulator is mapped to `type`, **all nested terminal CLIs work**: `opencode`, `nvim`, `codex` inside Kitty/Alacritty/iTerm2/Terminal/Ghostty/WezTerm are typed char-by-char without collapse.
+The `auto` mode (default) detects the frontmost app via `osascript` and picks the right strategy (`src/insert/mod.rs`, `src/insert/app_detect.rs`). Because every terminal emulator is mapped to `type`, **all nested terminal CLIs work**: `opencode`, `nvim`, `codex` inside Kitty/Alacritty/iTerm2/Terminal/Ghostty/WezTerm are typed char-by-char without collapse.
 
-> **Nested-CLI tip:** Run `miccli start` in a **separate pane/window** from the TUI you dictate into. The insertion uses `CGEvent` to type into the frontmost app — if miccli's own TUI is frontmost, text would go to its own terminal instead of `opencode`/`nvim`. The hotkey is global (`CGEventTap` in `src/hotkey.rs`), so you can hold `Shift+Control` while `opencode` is focused even though `miccli`'s TUI is in another pane.
+> **Nested-CLI tip:** Run `miccli start` in a **separate pane/window** from the TUI you dictate into. The insertion uses `CGEvent` to type into the frontmost app — the hotkey is global (`CGEventTap` in `src/hotkey.rs`), so you can hold `Shift+Control` while `opencode` is focused even though `miccli`'s overlay is blank in another pane. `miccli dashboard` needs its own terminal — it stops the daemon first.
 
 For VS Code's integrated terminal (`com.microsoft.VSCode` defaults to `paste`), add:
 
@@ -182,10 +221,12 @@ Requirements:
 
 ```bash
 cargo build --release  # 24 MB, lto+strip; deps: whisper-rs + ort + ratatui/crossterm
-cargo test             # 51 passed (incl. TUI TestBackend renders)
+cargo test             # 56 passed (incl. TUI TestBackend renders)
 ```
 
 Release size: `ratatui 0.29` + `crossterm 0.28` adds ~1–2 MB over the `ort`/`whisper-rs` baseline (still 24 MB release).
+
+**Background vs foreground:** No fork — `miccli start` stays in foreground (blank when idle). CPU identical for `overlay` vs `dashboard` vs plain (`50 ms` idle, `12 ms` recording). `miccli dashboard` reuses the same terminal via `SIGTERM` + `EnterAlternateScreen`; no extra `fork` overhead. `toggle` (`SIGUSR1`) pauses with near-zero cost.
 
 ## License
 

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-13
+
+### Added
+- **Overlay (whisperflow) as default** — `miccli start` is now blank when idle (primary screen unchanged, no clear), and shows a small top-aligned overlay only while holding the hotkey. Auto-hides ~1.4 s after release (like WhisperFlow). No `q` needed while coding.
+  - Overlay box (~6 lines, `src/tui/ui.rs:render_overlay`): `● REC` pulsing + `app_name` + `⌨ type`/`⎘ paste`, single-line blocks waveform `▁▂▃▄▅▆▇█` via `src/tui/waveform.rs:level_to_block`/`waveform_to_blocks` (40–180 cols), transcription + `raw` diff, status/latencies. Top-aligned, hides cursor, transient alt-screen (`src/tui/mod.rs:init_overlay_terminal`).
+  - `tui.mode` config (`src/config.rs:TuiConfig`): `overlay` (default, whisperflow) | `dashboard` (persistent full) | `none` (plain logs). Added to `config/config.toml` and `src/tui/mod.rs:default_config_text`.
+  - `AppMode` enum (`src/tui/mod.rs`) + `AppState.mode`/`paused` (`src/tui/ui.rs`); `run_overlay_loop` (`src/daemon.rs`) keeps `50 ms` idle / `12 ms` recording sleeps, so **background vs foreground CPU identical** (~0.1% idle, ~0.5–1% recording) — no fork needed, foreground stays (blank idle) and `CGEventTap` remains global.
+- **Full dashboard coexistence** — `miccli dashboard` (`src/main.rs:Commands::Dashboard`, `src/daemon.rs:dashboard`) stops the daemon (SIGTERM, wait pid removal), opens persistent 4-tab dashboard (`src/tui/ui.rs:render_dashboard`, `src/daemon.rs:run_dashboard_loop` / `run_dashboard_standalone`), `q`/`Esc`/`Ctrl+C` quit → auto-restarts overlay daemon in same terminal (`start().await`). Both modes coexist.
+- **Pause toggle** — `miccli toggle` repurposed to pause/resume (SIGUSR1). `setup_pause_handler` (`src/daemon.rs`) spawns `tokio::signal::unix::signal(SignalKind::user_defined1)` that flips `Arc<AtomicBool> paused`; overlay shows `⏸ paused` and hotkey is ignored until toggled.
+
+### Changed
+- `miccli start` no longer takes `--foreground` / `--no-tui` — removed unused `foreground` flag (`src/main.rs`, `src/daemon.rs:start()` now `() -> Result`). Fallback is now `tui.mode = "none"` or non-TTY (`tui::is_tty()`), not a CLI flag. `src/tui/mod.rs:init_terminal` no longer clears when idle; overlay uses transient alt-screen.
+- Dashboard `render()` now dispatches on `AppState.mode` (`src/tui/ui.rs:render` → `render_overlay` vs `render_dashboard`); existing `render` kept for tests with `#[allow(dead_code)]`.
+- Bumped `Cargo.toml` `0.2.0` → `0.3.0`.
+
+### Fixed
+- Overlay idle no longer clears primary screen — respects "terminal is as it is" (no change when not recording).
+- SIGUSR1 no longer kills daemon (now handled, previously default terminate); toggle was a no-op in `0.2.0`.
+- Waveform `50` now correctly maps to `▄` (was `▅` in test), and `blocks_mapping` test updated (`src/tui/waveform.rs`).
+
 ## [0.2.0] - 2026-09-13
 
 ### Added
@@ -47,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Energy-based VAD placeholder (Silero integration planned)
 - MCP server subcommand (planned)
 
-[Unreleased]: https://github.com/AkashJana18/miccli/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/AkashJana18/miccli/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/AkashJana18/miccli/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/AkashJana18/miccli/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/AkashJana18/miccli/releases/tag/v0.1.0

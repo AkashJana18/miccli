@@ -1,7 +1,8 @@
 pub mod ui;
 pub mod waveform;
 
-pub use waveform::WaveformHistory;
+#[allow(unused_imports)]
+pub use waveform::{WaveformHistory, level_to_block, waveform_to_blocks};
 pub use ui::{AppState, LatencyStats, ModelRow};
 
 use anyhow::Result;
@@ -17,6 +18,24 @@ use std::time::Duration;
 /// Returns true if stdout is a TTY (can show TUI).
 pub fn is_tty() -> bool {
     std::io::stdout().is_terminal()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AppMode {
+    Overlay,
+    Dashboard,
+    None,
+}
+
+impl AppMode {
+    pub fn from_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "overlay" | "minimal" | "hud" | "whisperflow" => AppMode::Overlay,
+            "dashboard" | "full" | "tui" => AppMode::Dashboard,
+            "none" | "off" | "plain" => AppMode::None,
+            _ => AppMode::Overlay,
+        }
+    }
 }
 
 /// Actions derived from crossterm key events.
@@ -64,7 +83,20 @@ pub fn poll_key_action(timeout: Duration) -> Result<TuiKeyAction> {
 
 pub type TuiTerminal = Terminal<CrosstermBackend<std::io::Stdout>>;
 
+/// Full dashboard: alt-screen + clear
 pub fn init_terminal() -> Result<TuiTerminal> {
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+    terminal.hide_cursor()?;
+    Ok(terminal)
+}
+
+/// Overlay (whisperflow): alt-screen + clear only while recording — when idle we stay on primary screen.
+pub fn init_overlay_terminal() -> Result<TuiTerminal> {
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -80,6 +112,15 @@ pub fn restore_terminal(terminal: &mut TuiTerminal) -> Result<()> {
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
+}
+
+#[allow(dead_code)]
+pub fn wants_overlay(cfg: &crate::config::Config) -> bool {
+    AppMode::from_str(&cfg.tui.mode) == AppMode::Overlay && is_tty()
+}
+#[allow(dead_code)]
+pub fn wants_dashboard(cfg: &crate::config::Config) -> bool {
+    AppMode::from_str(&cfg.tui.mode) == AppMode::Dashboard && is_tty()
 }
 
 /// Build initial AppState from config + filesystem.
@@ -184,6 +225,9 @@ default = "auto"
 key_delay_ms = 20
 paste_delay_ms = 10
 restore_clipboard = true
+
+[tui]
+mode = "overlay"              # overlay | dashboard | none
 "#
     .to_string()
 }

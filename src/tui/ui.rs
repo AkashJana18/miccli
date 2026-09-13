@@ -8,7 +8,8 @@ use ratatui::{
     Frame,
 };
 
-use super::waveform::WaveformHistory;
+use super::waveform::{waveform_to_blocks, WaveformHistory};
+use super::AppMode;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -86,6 +87,8 @@ pub struct AppState {
     pub config_text: String,
     pub config_path: String,
     pub version: String,
+    pub mode: AppMode,
+    pub paused: bool,
 }
 
 impl Default for AppState {
@@ -111,6 +114,8 @@ impl Default for AppState {
             config_text: String::new(),
             config_path: "~/.config/miccli/config.toml".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
+            mode: AppMode::Overlay,
+            paused: false,
         }
     }
 }
@@ -127,7 +132,15 @@ impl AppState {
     }
 }
 
+#[allow(dead_code)]
 pub fn render(frame: &mut Frame, app: &AppState, waveform: &WaveformHistory) {
+    match app.mode {
+        AppMode::Overlay => render_overlay(frame, app, waveform),
+        _ => render_dashboard(frame, app, waveform),
+    }
+}
+
+pub fn render_dashboard(frame: &mut Frame, app: &AppState, waveform: &WaveformHistory) {
     let area = frame.area();
 
     // Outer layout: header, tabs, body, footer
@@ -150,6 +163,164 @@ pub fn render(frame: &mut Frame, app: &AppState, waveform: &WaveformHistory) {
         Tab::Help => render_help(frame, vertical[2], app),
     }
     render_footer(frame, vertical[3], app);
+}
+
+/// Minimal whisperflow-style overlay: top-aligned small box (~6 lines), no tabs.
+pub fn render_overlay(frame: &mut Frame, app: &AppState, waveform: &WaveformHistory) {
+    let area = frame.area();
+    // Top-aligned overlay: height 7 if we have transcription, else 6
+    let has_text = !app.transcription.is_empty();
+    let box_h: u16 = if has_text { 7 } else { 6 };
+    let overlay_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: box_h.min(area.height),
+    };
+
+    let border_col = if app.paused {
+        Color::Yellow
+    } else if app.is_recording {
+        Color::Red
+    } else if app.error.is_some() {
+        Color::Red
+    } else {
+        Color::Cyan
+    };
+
+    let title = if app.paused {
+        " miccli — ⏸ paused (toggle to resume) "
+    } else if app.is_recording {
+        " miccli — ● recording "
+    } else {
+        " miccli "
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_col))
+        .title(title)
+        .title_style(Style::default().fg(border_col).add_modifier(Modifier::BOLD));
+
+    let inner = block.inner(overlay_area);
+    frame.render_widget(block, overlay_area);
+
+    if inner.height < 2 || inner.width < 10 {
+        return;
+    }
+
+    let inner_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // header line
+            Constraint::Length(1), // waveform
+            Constraint::Min(1),    // transcription/status
+            Constraint::Length(1), // footer hint
+        ])
+        .split(inner);
+
+    // Header line: hotkey + app + strategy (+ paused)
+    let header_line = if app.paused {
+        Line::from(vec![
+            Span::styled(" ⏸ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("paused", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("  {}  ", app.hotkey), Style::default().fg(Color::DarkGray)),
+            Span::styled("toggle to resume", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+        ])
+    } else {
+        let dot = if app.is_recording {
+            if app.tick % 10 < 5 { "●" } else { "○" }
+        } else {
+            "■"
+        };
+        let rec_style = if app.is_recording {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let app_name = app.app_name.as_deref().unwrap_or("—");
+        Line::from(vec![
+            Span::styled(format!(" {} {}  ", dot, if app.is_recording { "REC" } else { "IDLE" }), rec_style),
+            Span::styled(format!("{}  ", app.hotkey), Style::default().fg(Color::Yellow)),
+            Span::styled(format!("{}  ", app_name), Style::default().fg(Color::DarkGray)),
+            Span::styled(strategy_icon(&app.strategy), Style::default().fg(match app.strategy.as_str() { "type" => Color::Magenta, "paste" => Color::Green, _ => Color::DarkGray })),
+        ])
+    };
+    frame.render_widget(Paragraph::new(header_line).alignment(Alignment::Left), inner_chunks[0]);
+
+    // Waveform line (inline blocks)
+    let data = waveform.data();
+    let wf_width = inner_chunks[1].width as usize;
+    let wf_str = if app.paused {
+        "─ paused ─".to_string()
+    } else if data.is_empty() && app.is_recording {
+        "▁▂▃ listening…".to_string()
+    } else if data.is_empty() {
+        String::new()
+    } else {
+        waveform_to_blocks(&data, wf_width.saturating_sub(2))
+    };
+    let wf_color = if app.is_recording {
+        let max = waveform.max_level();
+        if max > 70 { Color::Red } else if max > 35 { Color::Yellow } else { Color::Cyan }
+    } else {
+        Color::DarkGray
+    };
+    let wf_line = Line::from(vec![Span::styled(
+        format!(" {}", wf_str),
+        Style::default().fg(wf_color),
+    )]);
+    frame.render_widget(Paragraph::new(wf_line), inner_chunks[1]);
+
+    // Transcription / status
+    let mid_para = if let Some(err) = &app.error {
+        Paragraph::new(Line::from(vec![
+            Span::styled("⚠ ", Style::default().fg(Color::Red)),
+            Span::styled(err.clone(), Style::default().fg(Color::Red)),
+        ]))
+        .wrap(Wrap { trim: true })
+    } else if !app.transcription.is_empty() {
+        let mut lines = vec![Line::from(vec![Span::styled(
+            format!("\"{}\"", app.transcription),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )])];
+        if !app.raw_text.is_empty() && app.raw_text != app.transcription {
+            lines.push(Line::from(vec![
+                Span::styled("raw: ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+                Span::styled(format!("\"{}\"", app.raw_text), Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC)),
+            ]));
+        }
+        Paragraph::new(lines).wrap(Wrap { trim: true })
+    } else if app.is_recording {
+        Paragraph::new(Line::from(vec![Span::styled(
+            "  listening… speak now",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        )]))
+    } else if !app.status.is_empty() {
+        Paragraph::new(Line::from(vec![Span::styled(
+            app.status.clone(),
+            Style::default().fg(Color::DarkGray),
+        )]))
+        .wrap(Wrap { trim: true })
+    } else {
+        Paragraph::new(Line::from(""))
+    };
+    frame.render_widget(mid_para, inner_chunks[2]);
+
+    // Footer hint (only when not paused? always show toggle hint)
+    let footer = if app.is_recording {
+        Line::from(vec![Span::styled(
+            "  hold to talk — release to transcribe",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        )])
+    } else {
+        Line::from(vec![
+            Span::styled(" toggle", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" pause  ", Style::default().fg(Color::DarkGray)),
+        ])
+    };
+    frame.render_widget(Paragraph::new(footer), inner_chunks[3]);
 }
 
 fn render_header(frame: &mut Frame, area: Rect, app: &AppState) {
@@ -897,6 +1068,7 @@ mod tests {
 
     fn make_app(tab: Tab, recording: bool) -> AppState {
         let mut app = AppState::default();
+        app.mode = crate::tui::AppMode::Dashboard;
         app.tab = tab;
         app.is_recording = recording;
         app.transcription = "Hello world from miccli".to_string();
@@ -927,6 +1099,18 @@ mod tests {
             insert: std::time::Duration::from_millis(30),
             total: std::time::Duration::from_millis(970),
         });
+        app
+    }
+
+    fn make_overlay_app(recording: bool) -> AppState {
+        let mut app = AppState::default();
+        app.mode = crate::tui::AppMode::Overlay;
+        app.is_recording = recording;
+        app.transcription = "Hello overlay".to_string();
+        app.hotkey = "Shift+Control".to_string();
+        app.app_name = Some("dev.opencode".to_string());
+        app.strategy = "type".to_string();
+        app.tick = 3;
         app
     }
 
@@ -1004,5 +1188,33 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let res = terminal.draw(|f| render(f, &app, &wf));
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn renders_overlay_idle_blank() {
+        let app = make_overlay_app(false);
+        let wf = WaveformHistory::new(40);
+        let s = render_to_string(&app, &wf);
+        assert!(s.contains("miccli"));
+    }
+
+    #[test]
+    fn renders_overlay_recording() {
+        let app = make_overlay_app(true);
+        let mut wf = WaveformHistory::new(40);
+        for _ in 0..10 {
+            wf.push_level(70);
+        }
+        let s = render_to_string(&app, &wf);
+        assert!(s.contains("REC") || s.contains("●"));
+    }
+
+    #[test]
+    fn renders_overlay_paused() {
+        let mut app = make_overlay_app(false);
+        app.paused = true;
+        let wf = WaveformHistory::new(40);
+        let s = render_to_string(&app, &wf);
+        assert!(s.contains("paused") || s.contains("⏸"));
     }
 }
