@@ -117,7 +117,7 @@ unsafe fn create_window() -> Option<bool> {
     };
 
     let win_w: f64 = 560.0;
-    let win_h: f64 = 78.0;
+    let win_h: f64 = 96.0;
     let win_x = screen_frame.origin.x + (screen_frame.size.width - win_w) / 2.0;
     let win_y = screen_frame.origin.y + screen_frame.size.height - win_h - 28.0;
     let rect = NSRect::new(NSPoint::new(win_x, win_y), NSSize::new(win_w, win_h));
@@ -153,20 +153,23 @@ unsafe fn create_window() -> Option<bool> {
         }
 
         let tf_top: id = make_label(
-            NSRect::new(NSPoint::new(14., win_h - 22.), NSSize::new(win_w - 28., 16.)),
+            NSRect::new(NSPoint::new(14., win_h - 20.), NSSize::new(win_w - 28., 16.)),
             "miccli — idle",
+            11.0,
         );
         let _: () = msg_send![content, addSubview: tf_top];
 
         let tf_wave: id = make_label(
-            NSRect::new(NSPoint::new(14., win_h - 40.), NSSize::new(win_w - 28., 16.)),
+            NSRect::new(NSPoint::new(14., win_h - 50.), NSSize::new(win_w - 28., 28.)),
             "",
+            18.0,
         );
         let _: () = msg_send![content, addSubview: tf_wave];
 
         let tf_bottom: id = make_label(
             NSRect::new(NSPoint::new(14., 10.), NSSize::new(win_w - 28., 28.)),
             "Hold Shift+Control to talk",
+            11.0,
         );
         let _: () = msg_send![tf_bottom, setLineBreakMode: 0u64];
         let _: () = msg_send![content, addSubview: tf_bottom];
@@ -278,7 +281,7 @@ unsafe fn do_status(s: &str) {
 }
 
 #[cfg(target_os = "macos")]
-unsafe fn make_label(rect: cocoa::foundation::NSRect, text: &str) -> cocoa::base::id {
+unsafe fn make_label(rect: cocoa::foundation::NSRect, text: &str, size: f64) -> cocoa::base::id {
     use cocoa::appkit::{NSColor, NSTextField};
     use cocoa::base::{id, nil};
     use cocoa::foundation::NSString;
@@ -294,6 +297,24 @@ unsafe fn make_label(rect: cocoa::foundation::NSRect, text: &str) -> cocoa::base
     let _: () = msg_send![tf, setDrawsBackground: cocoa::base::NO];
     let _: () = msg_send![tf, setEditable: cocoa::base::NO];
     let _: () = msg_send![tf, setSelectable: cocoa::base::NO];
+    // Try monospaced for waveform (size 18), else system font
+    let font: id = if (size - 18.0).abs() < 0.1 {
+        // Menlo for waveform — taller blocks
+        let name = NSString::alloc(nil).init_str("Menlo");
+        let cls = objc::runtime::Class::get("NSFont").unwrap();
+        let f: id = msg_send![cls, fontWithName: name size: size];
+        if f == nil {
+            msg_send![cls, systemFontOfSize: size]
+        } else {
+            f
+        }
+    } else {
+        let cls = objc::runtime::Class::get("NSFont").unwrap();
+        msg_send![cls, systemFontOfSize: size]
+    };
+    if font != nil {
+        let _: () = msg_send![tf, setFont: font];
+    }
     let col: id = NSColor::colorWithRed_green_blue_alpha_(nil, 0.9, 0.9, 0.92, 1.0);
     let _: () = msg_send![tf, setTextColor: col];
     tf
