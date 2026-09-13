@@ -21,16 +21,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the voice dictation daemon (TUI by default)
-    Start {
-        /// Run in foreground (no background daemon)
-        #[arg(long)]
-        foreground: bool,
-        /// Disable TUI and use plain log output
-        #[arg(long)]
-        no_tui: bool,
-    },
-    /// Toggle recording on/off (sends signal to running daemon)
+    /// Start the voice dictation daemon (overlay TUI by default)
+    Start,
+    /// Open the full dashboard (stops daemon, shows 4-tab TUI, restarts on exit)
+    Dashboard,
+    /// Toggle pause/resume (sends SIGUSR1 to running daemon)
     Toggle,
     /// Stop the running daemon
     Stop,
@@ -75,9 +70,13 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Start { foreground, no_tui } => {
+        Commands::Start => {
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(daemon::start(foreground, no_tui))
+            rt.block_on(daemon::start())
+        }
+        Commands::Dashboard => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(daemon::dashboard())
         }
         Commands::Toggle => daemon::send_signal("toggle"),
         Commands::Stop => daemon::send_signal("stop"),

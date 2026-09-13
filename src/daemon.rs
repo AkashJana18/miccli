@@ -13,9 +13,13 @@ use crate::stt;
 use crate::tui;
 use crate::vad::{SileroVad, VadEvent};
 
-pub async fn start(_foreground: bool, no_tui: bool) -> Result<()> {
+pub async fn start() -> Result<()> {
     let cfg = config::load_config()?;
     let running = Arc::new(AtomicBool::new(true));
+    let paused = Arc::new(AtomicBool::new(false));
+
+    // Signal handler for SIGUSR1 (toggle pause)
+    setup_pause_handler(paused.clone());
 
     // Write PID file
     let pid_file = dirs::home_dir()
@@ -49,60 +53,198 @@ pub async fn start(_foreground: bool, no_tui: bool) -> Result<()> {
     let audio_stream = capture.start_capture()?;
     let audio_rx = audio_stream.rx;
 
-    let use_tui = !no_tui && tui::is_tty();
+    let mode = tui::AppMode::from_str(&cfg.tui.mode);
+    let is_tty = tui::is_tty();
 
-    let result = if use_tui {
-        match tui::init_terminal() {
-            Ok(mut terminal) => {
-                let r = run_tui_loop(
-                    &cfg,
-                    &stt_engine,
-                    &mut vad_engine,
-                    &hotkey_manager,
-                    audio_rx,
-                    running.clone(),
-                    &mut terminal,
-                )
-                .await;
-                // Always restore even if loop errored
-                let _ = tui::restore_terminal(&mut terminal);
-                r
-            }
-            Err(e) => {
-                eprintln!("TUI init failed ({}), falling back to plain mode", e);
-                run_plain_loop(
-                    &cfg,
-                    &stt_engine,
-                    &mut vad_engine,
-                    &hotkey_manager,
-                    audio_rx,
-                    running.clone(),
-                    &hotkey_manager.combo().to_string(),
-                )
-                .await
+    let result = match (mode, is_tty) {
+        (tui::AppMode::None, _) | (_, false) => {
+            // Plain logs (config none or not a TTY)
+            run_plain_loop(
+                &cfg,
+                &stt_engine,
+                &mut vad_engine,
+                &hotkey_manager,
+                audio_rx,
+                running.clone(),
+                paused.clone(),
+                &hotkey_manager.combo().to_string(),
+            )
+            .await
+        }
+        (tui::AppMode::Dashboard, true) => {
+            // Persistent full dashboard as daemon (if user sets tui.mode=dashboard)
+            match tui::init_terminal() {
+                Ok(mut terminal) => {
+                    let r = run_dashboard_loop(
+                        &cfg,
+                        &stt_engine,
+                        &mut vad_engine,
+                        &hotkey_manager,
+                        audio_rx,
+                        running.clone(),
+                        paused.clone(),
+                        &mut terminal,
+                    )
+                    .await;
+                    let _ = tui::restore_terminal(&mut terminal);
+                    r
+                }
+                Err(e) => {
+                    eprintln!("TUI init failed ({}), falling back to plain", e);
+                    run_plain_loop(
+                        &cfg,
+                        &stt_engine,
+                        &mut vad_engine,
+                        &hotkey_manager,
+                        audio_rx,
+                        running.clone(),
+                        paused.clone(),
+                        &hotkey_manager.combo().to_string(),
+                    )
+                    .await
+                }
             }
         }
-    } else {
-        run_plain_loop(
-            &cfg,
-            &stt_engine,
-            &mut vad_engine,
-            &hotkey_manager,
-            audio_rx,
-            running.clone(),
-            &hotkey_manager.combo().to_string(),
-        )
-        .await
+        (tui::AppMode::Overlay, true) => {
+            // Whisperflow-style: blank when idle, small overlay only while recording
+            run_overlay_loop(
+                &cfg,
+                &stt_engine,
+                &mut vad_engine,
+                &hotkey_manager,
+                audio_rx,
+                running.clone(),
+                paused.clone(),
+            )
+            .await
+        }
     };
 
     hotkey_manager.stop();
     let _ = fs::remove_file(&pid_file);
-    if use_tui {
-        println!("miccli stopped.");
-    } else {
-        println!("miccli stopped.");
-    }
+    println!("miccli stopped.");
     result
+}
+
+/// Dashboard command: stop daemon if running → show full 4-tab dashboard → auto-restart daemon
+pub async fn dashboard() -> Result<()> {
+    let pid_file = dirs::home_dir()
+        .context("No home dir")?
+        .join(".config")
+        .join("miccli")
+        .join("miccli.pid");
+    let was_running = pid_file.exists();
+    if was_running {
+        println!("Stopping running miccli daemon...");
+        let _ = send_signal("stop");
+        // Wait for pid file removal (daemon exit + restore_terminal)
+        for _ in 0..50 {
+            if !pid_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        // Extra grace to let old terminal restore
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        if pid_file.exists() {
+            eprintln!("Warning: daemon pid file still exists, dashboard may conflict");
+        } else {
+            println!("Daemon stopped. Opening dashboard...");
+        }
+    }
+
+    // Run full dashboard (standalone, no audio/hotkey needed — just config + models)
+    let cfg = config::load_config().unwrap_or_default();
+    // Try to init dashboard terminal
+    let res = match tui::init_terminal() {
+        Ok(mut terminal) => {
+            let r = run_dashboard_standalone(&cfg, &mut terminal).await;
+            let _ = tui::restore_terminal(&mut terminal);
+            r
+        }
+        Err(e) => {
+            eprintln!("Dashboard TUI failed ({}), showing plain info", e);
+            // Fallback plain
+            let cfg_dir = config::config_dir()?;
+            println!("Config: {}", cfg_dir.join("config.toml").display());
+            println!("TUI mode: {}", cfg.tui.mode);
+            println!("Run `miccli models list` or edit config.toml");
+            Ok(())
+        }
+    };
+
+    if was_running {
+        println!("\nDashboard closed — restarting miccli daemon (overlay)...");
+        // Become the new daemon (overlay) in this terminal.
+        // This blocks until the new daemon is stopped.
+        // If user wants background, they can Ctrl+Z / or run in another pane.
+        // We re-enter start() which will run overlay loop.
+        // Note: start() will re-write pid file.
+        if let Err(e) = start().await {
+            eprintln!("Failed to restart daemon: {}", e);
+            return res;
+        }
+    }
+    res
+}
+
+async fn run_dashboard_standalone(cfg: &config::Config, terminal: &mut tui::TuiTerminal) -> Result<()> {
+    use tui::{ui, WaveformHistory};
+    let mut app = tui::build_initial_state("Shift+Control", &cfg.whisper.model, cfg.vad.threshold);
+    app.mode = tui::AppMode::Dashboard;
+    app.strategy = cfg.insertion.default.clone();
+    // Show dashboard until q
+    let waveform = WaveformHistory::new(120);
+    // Pre-fill a tiny waveform for demo
+    // No live audio in dashboard standalone — just static
+
+    terminal.draw(|f| ui::render_dashboard(f, &app, &waveform))?;
+
+    loop {
+        if let Ok(action) = tui::poll_key_action(Duration::from_millis(80)) {
+            match action {
+                tui::TuiKeyAction::Quit => break,
+                tui::TuiKeyAction::NextTab => app.next_tab(),
+                tui::TuiKeyAction::PrevTab => app.prev_tab(),
+                tui::TuiKeyAction::SelectTab(i) => app.set_tab(i),
+                tui::TuiKeyAction::None => {}
+            }
+        }
+        // Keep app tick for pulsing if needed
+        app.tick = app.tick.wrapping_add(1);
+        terminal.draw(|f| ui::render_dashboard(f, &app, &waveform))?;
+        tokio::time::sleep(Duration::from_millis(33)).await;
+    }
+    Ok(())
+}
+
+fn setup_pause_handler(paused: Arc<AtomicBool>) {
+    #[cfg(unix)]
+    {
+        // Use tokio::signal for SIGUSR1 if available; fallback to safe no-op if not.
+        // We spawn a background task that toggles `paused` on SIGUSR1.
+        tokio::spawn(async move {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                if let Ok(mut sig) = signal(SignalKind::user_defined1()) {
+                    while sig.recv().await.is_some() {
+                        let prev = paused.load(Ordering::Relaxed);
+                        paused.store(!prev, Ordering::Relaxed);
+                        if !prev {
+                            tracing::info!("⏸ paused (toggle)");
+                        } else {
+                            tracing::info!("▶ resumed (toggle)");
+                        }
+                    }
+                }
+            }
+        });
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = paused;
+    }
 }
 
 async fn run_plain_loop(
@@ -112,14 +254,17 @@ async fn run_plain_loop(
     hotkey_manager: &HotkeyManager,
     audio_rx: std::sync::mpsc::Receiver<Vec<f32>>,
     running: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     combo: &str,
 ) -> Result<()> {
     println!(
-        "miccli is running. Hold {} to talk, release to insert text.",
-        combo
+        "miccli is running (overlay={}). Hold {} to talk, release to insert text.",
+        cfg.tui.mode, combo
     );
-    println!("   Press Ctrl+C to quit");
-    println!("   ● appears while recording, ■ when stopped.");
+    if paused.load(Ordering::Relaxed) {
+        println!("   ⏸ paused — `miccli toggle` to resume");
+    }
+    println!("   Press Ctrl+C to quit, `miccli toggle` to pause/resume, `miccli dashboard` for full TUI");
     println!();
     let _ = std::io::Write::flush(&mut std::io::stdout());
 
@@ -128,7 +273,7 @@ async fn run_plain_loop(
 
     while running.load(Ordering::Relaxed) {
         while let Ok(chunk) = audio_rx.try_recv() {
-            if is_recording {
+            if is_recording && !paused.load(Ordering::Relaxed) {
                 audio_buffer.extend_from_slice(&chunk);
                 match vad_engine.process(&chunk) {
                     Ok(VadEvent::SpeechEnd) => {
@@ -150,8 +295,15 @@ async fn run_plain_loop(
             }
         }
 
+        // Show paused state changes
+        // (SIGUSR1 toggles `paused`; we don't need to poll it explicitly except to ignore hotkey)
+
         match hotkey_manager.wait_for_action() {
             Ok(Some(HotkeyAction::Pressed)) if !is_recording => {
+                if paused.load(Ordering::Relaxed) {
+                    println!("⏸ paused — ignoring hotkey (toggle to resume)");
+                    continue;
+                }
                 is_recording = true;
                 audio_buffer.clear();
                 print!("● recording…");
@@ -178,13 +330,14 @@ async fn run_plain_loop(
     Ok(())
 }
 
-async fn run_tui_loop(
+async fn run_dashboard_loop(
     cfg: &config::Config,
     stt_engine: &stt::WhisperStt,
     vad_engine: &mut SileroVad,
     hotkey_manager: &HotkeyManager,
     audio_rx: std::sync::mpsc::Receiver<Vec<f32>>,
     running: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     terminal: &mut tui::TuiTerminal,
 ) -> Result<()> {
     use tui::{ui, WaveformHistory};
@@ -194,7 +347,7 @@ async fn run_tui_loop(
         &cfg.whisper.model,
         cfg.vad.threshold,
     );
-    // Ensure insertion strategy shown matches config default
+    app.mode = tui::AppMode::Dashboard;
     app.strategy = cfg.insertion.default.clone();
 
     let mut waveform = WaveformHistory::new(120);
@@ -204,40 +357,33 @@ async fn run_tui_loop(
     let mut last_app_check = Instant::now();
     let mut pending_vad_stop = false;
 
-    // Initial draw
-    terminal.draw(|f| ui::render(f, &app, &waveform))?;
+    terminal.draw(|f| ui::render_dashboard(f, &app, &waveform))?;
 
     while running.load(Ordering::Relaxed) {
         tick = tick.wrapping_add(1);
         app.tick = tick;
+        app.paused = paused.load(Ordering::Relaxed);
 
-        // Adapt waveform capacity to terminal width
         if let Ok(size) = terminal.size() {
             let cap = (size.width as usize).saturating_sub(10).clamp(60, 220);
             waveform.set_capacity(cap);
         }
 
-        // Periodically refresh frontmost app (throttled to avoid osascript spam)
         if last_app_check.elapsed() > Duration::from_millis(900) {
             last_app_check = Instant::now();
             let bundle = insert::app_detect::get_frontmost_bundle_id();
             app.app_name = bundle.clone();
-            // Resolve strategy name for display
-            let strat = resolve_strategy_name(&bundle, cfg);
-            app.strategy = strat;
+            app.strategy = resolve_strategy_name(&bundle, cfg);
         }
 
-        // Drain audio
         let mut had_chunk = false;
         let mut vad_triggered = false;
         while let Ok(chunk) = audio_rx.try_recv() {
             had_chunk = true;
-            // Always push to waveform for live visualization
             waveform.push_chunk(&chunk);
-            if is_recording {
+            if is_recording && !app.paused {
                 audio_buffer.extend_from_slice(&chunk);
                 app.recording_samples = audio_buffer.len();
-                // VAD for auto-stop
                 match vad_engine.process(&chunk) {
                     Ok(VadEvent::SpeechEnd) => {
                         tracing::info!("VAD: speech ended, auto-stopping");
@@ -247,9 +393,7 @@ async fn run_tui_loop(
                     Ok(VadEvent::SpeechStart) => {
                         app.vad_status = "speech detected".to_string();
                     }
-                    Ok(VadEvent::None) => {
-                        // keep last status
-                    }
+                    Ok(VadEvent::None) => {}
                     Err(e) => {
                         tracing::warn!("VAD error: {}", e);
                         app.vad_status = format!("vad err: {}", e);
@@ -259,10 +403,8 @@ async fn run_tui_loop(
         }
 
         if !had_chunk {
-            // Add subtle decay to keep sparkline moving
             if tick % 3 == 0 {
-                if is_recording {
-                    // While recording silence, still push 0 so waveform dips
+                if is_recording && !app.paused {
                     waveform.push_level(0);
                 } else if tick % 6 == 0 {
                     waveform.push_silence();
@@ -270,7 +412,6 @@ async fn run_tui_loop(
             }
         }
 
-        // Handle VAD auto-stop after draining
         if vad_triggered && is_recording {
             pending_vad_stop = true;
         }
@@ -280,14 +421,12 @@ async fn run_tui_loop(
             is_recording = false;
             app.is_recording = false;
             app.status = "VAD auto-stop — transcribing…".to_string();
-            // Drain any remaining audio that arrived while we processed VAD
             while let Ok(chunk) = audio_rx.try_recv() {
                 audio_buffer.extend_from_slice(&chunk);
                 waveform.push_chunk(&chunk);
             }
             app.recording_samples = audio_buffer.len();
-            // Draw transcribing state before heavy work
-            terminal.draw(|f| ui::render(f, &app, &waveform))?;
+            terminal.draw(|f| ui::render_dashboard(f, &app, &waveform))?;
             let buf = std::mem::take(&mut audio_buffer);
             match process_and_insert_tui(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion).await {
                 Ok(res) => {
@@ -315,18 +454,21 @@ async fn run_tui_loop(
             waveform.push_level(0);
         }
 
-        // Hotkey handling (non-blocking)
         match hotkey_manager.try_action() {
             Ok(Some(HotkeyAction::Pressed)) if !is_recording => {
-                is_recording = true;
-                app.is_recording = true;
-                audio_buffer.clear();
-                app.recording_samples = 0;
-                app.status = "● recording… hold to talk".to_string();
-                app.error = None;
-                app.vad_status = "listening…".to_string();
-                waveform.clear();
-                tracing::info!("● recording started (tui)");
+                if app.paused {
+                    app.status = "⏸ paused — `miccli toggle` to resume".to_string();
+                } else {
+                    is_recording = true;
+                    app.is_recording = true;
+                    audio_buffer.clear();
+                    app.recording_samples = 0;
+                    app.status = "● recording… hold to talk".to_string();
+                    app.error = None;
+                    app.vad_status = "listening…".to_string();
+                    waveform.clear();
+                    tracing::info!("● recording started (dashboard)");
+                }
             }
             Ok(Some(HotkeyAction::Pressed)) => {}
             Ok(Some(HotkeyAction::Released)) if is_recording => {
@@ -338,7 +480,7 @@ async fn run_tui_loop(
                 }
                 app.recording_samples = audio_buffer.len();
                 app.status = format!("■ stopped ({} samples) — transcribing…", app.recording_samples);
-                terminal.draw(|f| ui::render(f, &app, &waveform))?;
+                terminal.draw(|f| ui::render_dashboard(f, &app, &waveform))?;
                 let buf = std::mem::take(&mut audio_buffer);
                 match process_and_insert_tui(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion).await {
                     Ok(res) => {
@@ -369,7 +511,6 @@ async fn run_tui_loop(
             Err(()) => break,
         }
 
-        // TUI key handling (non-blocking)
         match tui::poll_key_action(Duration::from_millis(0)) {
             Ok(tui::TuiKeyAction::Quit) => {
                 running.store(false, Ordering::Relaxed);
@@ -384,16 +525,300 @@ async fn run_tui_loop(
             }
         }
 
-        // Render
-        terminal.draw(|f| ui::render(f, &app, &waveform))?;
+        terminal.draw(|f| ui::render_dashboard(f, &app, &waveform))?;
 
-        // Small throttle to avoid busy spinning; keeps ~30fps while idle, instant while recording
         if is_recording {
-            // While recording, loop fast for waveform smoothness
             tokio::time::sleep(Duration::from_millis(12)).await;
         } else {
             tokio::time::sleep(Duration::from_millis(33)).await;
         }
+    }
+
+    Ok(())
+}
+
+/// Overlay (whisperflow): blank when idle, small top box only while recording.
+async fn run_overlay_loop(
+    cfg: &config::Config,
+    stt_engine: &stt::WhisperStt,
+    vad_engine: &mut SileroVad,
+    hotkey_manager: &HotkeyManager,
+    audio_rx: std::sync::mpsc::Receiver<Vec<f32>>,
+    running: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+) -> Result<()> {
+    use tui::{ui, WaveformHistory};
+
+    let mut app = tui::build_initial_state(
+        &hotkey_manager.combo(),
+        &cfg.whisper.model,
+        cfg.vad.threshold,
+    );
+    app.mode = tui::AppMode::Overlay;
+    app.strategy = cfg.insertion.default.clone();
+
+    let mut waveform = WaveformHistory::new(120);
+    let mut is_recording = false;
+    let mut audio_buffer: Vec<f32> = Vec::new();
+    let mut tick: usize = 0;
+    let mut last_app_check = Instant::now();
+    let mut overlay: Option<tui::TuiTerminal> = None;
+    let mut pending_vad_stop = false;
+    let mut result_hold_until: Option<Instant> = None;
+
+    tracing::info!(
+        "miccli overlay running, hotkey {}, terminal blank when idle",
+        hotkey_manager.combo()
+    );
+
+    while running.load(Ordering::Relaxed) {
+        tick = tick.wrapping_add(1);
+        app.tick = tick;
+        app.paused = paused.load(Ordering::Relaxed);
+
+        // App detection throttled
+        if last_app_check.elapsed() > Duration::from_millis(900) {
+            last_app_check = Instant::now();
+            let bundle = insert::app_detect::get_frontmost_bundle_id();
+            app.app_name = bundle.clone();
+            app.strategy = resolve_strategy_name(&bundle, cfg);
+        }
+
+        // Drain audio
+        let mut had_chunk = false;
+        let mut vad_triggered = false;
+        while let Ok(chunk) = audio_rx.try_recv() {
+            had_chunk = true;
+            if is_recording && !app.paused {
+                waveform.push_chunk(&chunk);
+                audio_buffer.extend_from_slice(&chunk);
+                app.recording_samples = audio_buffer.len();
+                match vad_engine.process(&chunk) {
+                    Ok(VadEvent::SpeechEnd) => {
+                        tracing::info!("VAD: speech ended, auto-stopping");
+                        vad_triggered = true;
+                        app.vad_status = "speech end → auto-stop".to_string();
+                    }
+                    Ok(VadEvent::SpeechStart) => {
+                        app.vad_status = "speech detected".to_string();
+                    }
+                    Ok(VadEvent::None) => {}
+                    Err(e) => {
+                        tracing::warn!("VAD error: {}", e);
+                        app.vad_status = format!("vad err: {}", e);
+                    }
+                }
+            }
+        }
+
+        if !had_chunk && is_recording && !app.paused {
+            if tick % 3 == 0 {
+                waveform.push_level(0);
+            }
+        }
+
+        if vad_triggered && is_recording {
+            pending_vad_stop = true;
+        }
+
+        // If we have an overlay, adapt width
+        if let Some(term) = overlay.as_mut() {
+            if let Ok(size) = term.size() {
+                let cap = (size.width as usize).saturating_sub(10).clamp(40, 180);
+                waveform.set_capacity(cap);
+            }
+        }
+
+        // Handle VAD auto-stop while overlay is up
+        if pending_vad_stop && is_recording {
+            pending_vad_stop = false;
+            is_recording = false;
+            app.is_recording = false;
+            // Drain remaining
+            while let Ok(chunk) = audio_rx.try_recv() {
+                audio_buffer.extend_from_slice(&chunk);
+                waveform.push_chunk(&chunk);
+            }
+            app.recording_samples = audio_buffer.len();
+            app.status = "VAD auto-stop — transcribing…".to_string();
+            if let Some(term) = overlay.as_mut() {
+                let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
+            }
+            let buf = std::mem::take(&mut audio_buffer);
+            match process_and_insert_tui(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion).await {
+                Ok(res) => {
+                    if let Some(r) = res {
+                        app.transcription = r.text.clone();
+                        app.raw_text = r.raw.clone();
+                        app.latencies = Some(r.latencies);
+                        app.status = r.status;
+                        app.error = r.error;
+                        app.vad_status = r.vad_info;
+                        if let Some(bundle) = r.bundle_id {
+                            app.app_name = Some(bundle.clone());
+                            app.strategy = resolve_strategy_name(&Some(bundle), cfg);
+                        }
+                    } else {
+                        app.status = "No speech detected — try again".to_string();
+                        app.vad_status = "no speech".to_string();
+                        app.transcription.clear();
+                    }
+                }
+                Err(e) => {
+                    app.error = Some(e.to_string());
+                    app.status = "Transcription failed".to_string();
+                }
+            }
+            // Show result briefly, then hide overlay
+            if let Some(term) = overlay.as_mut() {
+                let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
+            }
+            result_hold_until = Some(Instant::now() + Duration::from_millis(1400));
+            // Don't hide immediately — let result_hold logic below handle it
+            waveform.push_level(0);
+        }
+
+        // Hotkey handling (non-blocking)
+        match hotkey_manager.try_action() {
+            Ok(Some(HotkeyAction::Pressed)) if !is_recording => {
+                if app.paused {
+                    // Briefly show paused overlay
+                    if overlay.is_none() {
+                        match tui::init_overlay_terminal() {
+                            Ok(term) => overlay = Some(term),
+                            Err(e) => tracing::warn!("overlay init failed: {}", e),
+                        }
+                    }
+                    app.status = "⏸ paused — `miccli toggle` to resume".to_string();
+                    if let Some(term) = overlay.as_mut() {
+                        let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
+                    }
+                    // Hold paused overlay 1.5s then hide
+                    result_hold_until = Some(Instant::now() + Duration::from_millis(1500));
+                } else {
+                    is_recording = true;
+                    app.is_recording = true;
+                    audio_buffer.clear();
+                    app.recording_samples = 0;
+                    app.status = "● recording… hold to talk".to_string();
+                    app.error = None;
+                    app.vad_status = "listening…".to_string();
+                    waveform.clear();
+                    result_hold_until = None;
+                    if overlay.is_none() {
+                        match tui::init_overlay_terminal() {
+                            Ok(term) => overlay = Some(term),
+                            Err(e) => {
+                                eprintln!("Overlay TUI failed ({}), recording without UI", e);
+                            }
+                        }
+                    }
+                    tracing::info!("● recording started (overlay)");
+                }
+            }
+            Ok(Some(HotkeyAction::Pressed)) => {}
+            Ok(Some(HotkeyAction::Released)) if is_recording => {
+                is_recording = false;
+                app.is_recording = false;
+                while let Ok(chunk) = audio_rx.try_recv() {
+                    audio_buffer.extend_from_slice(&chunk);
+                    waveform.push_chunk(&chunk);
+                }
+                app.recording_samples = audio_buffer.len();
+                app.status = format!("■ stopped ({} samples) — transcribing…", app.recording_samples);
+                if let Some(term) = overlay.as_mut() {
+                    let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
+                }
+                let buf = std::mem::take(&mut audio_buffer);
+                match process_and_insert_tui(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion).await {
+                    Ok(res) => {
+                        if let Some(r) = res {
+                            app.transcription = r.text.clone();
+                            app.raw_text = r.raw.clone();
+                            app.latencies = Some(r.latencies);
+                            app.status = r.status;
+                            app.error = r.error;
+                            app.vad_status = r.vad_info;
+                            if let Some(bundle) = r.bundle_id {
+                                app.app_name = Some(bundle.clone());
+                                app.strategy = resolve_strategy_name(&Some(bundle), cfg);
+                            }
+                        } else {
+                            app.status = "No speech detected — try again".to_string();
+                            app.vad_status = "no speech".to_string();
+                            app.transcription.clear();
+                        }
+                    }
+                    Err(e) => {
+                        app.error = Some(e.to_string());
+                        app.status = "Transcription failed".to_string();
+                    }
+                }
+                // Show result briefly
+                if let Some(term) = overlay.as_mut() {
+                    let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
+                }
+                result_hold_until = Some(Instant::now() + Duration::from_millis(1400));
+            }
+            Ok(Some(HotkeyAction::Released)) => {}
+            Ok(None) => {}
+            Err(()) => break,
+        }
+
+        // If overlay is active, draw it and handle q via poll
+        if let Some(term) = overlay.as_mut() {
+            // Poll for q/Ctrl+C to quit daemon while overlay is up
+            if let Ok(action) = tui::poll_key_action(Duration::from_millis(0)) {
+                if matches!(action, tui::TuiKeyAction::Quit) {
+                    running.store(false, Ordering::Relaxed);
+                    break;
+                }
+            }
+            // Draw overlay (top bar)
+            let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
+
+            // Check if we should auto-hide after result display
+            if !is_recording {
+                if let Some(until) = result_hold_until {
+                    if Instant::now() >= until {
+                        // Hide overlay, back to blank terminal
+                        let mut term = overlay.take().unwrap();
+                        let _ = tui::restore_terminal(&mut term);
+                        result_hold_until = None;
+                        // Clean transient state a bit
+                        // Keep transcription for next overlay? Clear after hide
+                        // Keep app.transcription so next press shows previous? We'll keep.
+                    } else {
+                        // Still holding result — keep drawing
+                    }
+                } else if waveform.len() == 0 && app.transcription.is_empty() {
+                    // Edge: no pending result, and not recording → hide immediately
+                    // But we only get here if overlay was just created for paused etc
+                    // Let result_hold_until handle
+                }
+            }
+        } else {
+            // No overlay — check for hold timeout to hide if we had a result
+            if let Some(until) = result_hold_until {
+                if Instant::now() >= until {
+                    result_hold_until = None;
+                }
+            }
+        }
+
+        if is_recording {
+            tokio::time::sleep(Duration::from_millis(12)).await;
+        } else if overlay.is_some() {
+            tokio::time::sleep(Duration::from_millis(33)).await;
+        } else {
+            // Idle, no overlay — very low CPU
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    // Ensure overlay is torn down if still up
+    if let Some(mut term) = overlay.take() {
+        let _ = tui::restore_terminal(&mut term);
     }
 
     Ok(())

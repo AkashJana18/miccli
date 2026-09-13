@@ -22,3 +22,6 @@ default = "auto"
 key_delay_ms = 20
 paste_delay_ms = 10
 restore_clipboard = true
+
+[tui]
+mode = "overlay"              # overlay | dashboard | none  — overlay = minimal whisperflow, dashboard = full 4-tab, none = plain logs

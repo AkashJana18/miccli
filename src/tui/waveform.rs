@@ -76,6 +76,26 @@ impl WaveformHistory {
     }
 }
 
+/// Map 0..100 level to a block char for minimal overlay.
+pub fn level_to_block(level: u64) -> char {
+    const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let idx = ((level as f32 / 100.0) * (BLOCKS.len() as f32 - 1.0)).round() as usize;
+    BLOCKS[idx.min(BLOCKS.len() - 1)]
+}
+
+/// Render history as a compact inline block string, width-aware.
+pub fn waveform_to_blocks(data: &[u64], width: usize) -> String {
+    if data.is_empty() || width == 0 {
+        return String::new();
+    }
+    let slice = if data.len() > width {
+        &data[data.len() - width..]
+    } else {
+        data
+    };
+    slice.iter().map(|&v| level_to_block(v)).collect()
+}
+
 /// Convert a chunk of f32 samples (-1.0..1.0) into a 0..100 level.
 pub fn chunk_to_level(chunk: &[f32]) -> u64 {
     if chunk.is_empty() {
@@ -137,5 +157,17 @@ mod tests {
         w.push_level(80);
         w.push_silence();
         assert!(w.data().last().unwrap() < &80);
+    }
+
+    #[test]
+    fn blocks_mapping() {
+        assert_eq!(level_to_block(0), ' ');
+        assert_eq!(level_to_block(100), '█');
+        assert_eq!(level_to_block(50), '▄');
+        assert_eq!(level_to_block(90), '▇');
+        let s = waveform_to_blocks(&[0, 20, 50, 80, 100], 5);
+        assert_eq!(s.chars().count(), 5);
+        let s2 = waveform_to_blocks(&[10, 20, 30, 40, 50, 60], 3);
+        assert_eq!(s2.chars().count(), 3);
     }
 }
