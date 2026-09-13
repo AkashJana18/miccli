@@ -9,6 +9,7 @@ use crate::cleanup;
 use crate::config;
 use crate::hotkey::{HotkeyAction, HotkeyManager};
 use crate::insert;
+use crate::overlay;
 use crate::stt;
 use crate::tui;
 use crate::vad::{SileroVad, VadEvent};
@@ -557,19 +558,57 @@ async fn run_overlay_loop(
     app.mode = tui::AppMode::Overlay;
     app.strategy = cfg.insertion.default.clone();
 
+    use crate::tui::waveform::waveform_to_blocks;
+
     let mut waveform = WaveformHistory::new(120);
     let mut is_recording = false;
     let mut audio_buffer: Vec<f32> = Vec::new();
     let mut tick: usize = 0;
     let mut last_app_check = Instant::now();
-    let mut overlay: Option<tui::TuiTerminal> = None;
+    // Native floating window (global, visible on opencode/other terminals) — preferred.
+    // Falls back to terminal alt-screen overlay when not on macOS or window creation fails.
+    let native_overlay = overlay::spawn();
+    let has_native = native_overlay.is_some();
+    let mut term_overlay: Option<tui::TuiTerminal> = None;
     let mut pending_vad_stop = false;
     let mut result_hold_until: Option<Instant> = None;
 
     tracing::info!(
-        "miccli overlay running, hotkey {}, terminal blank when idle",
-        hotkey_manager.combo()
+        "miccli overlay running, hotkey {}, native_window={}, terminal blank when idle",
+        hotkey_manager.combo(),
+        has_native
     );
+
+    // Helpers for showing/hiding overlay (native or terminal fallback)
+    let show_overlay = |app: &tui::AppState, waveform: &WaveformHistory, native: &Option<overlay::OverlayHandle>, term: &mut Option<tui::TuiTerminal>| {
+        if let Some(h) = native {
+            h.show();
+            h.set_recording(app.is_recording);
+            h.set_paused(app.paused);
+            let blocks = waveform_to_blocks(&waveform.data(), 48);
+            h.waveform(blocks);
+            let txt = if app.is_recording { "listening…".to_string() } else { app.transcription.clone() };
+            h.transcription(txt);
+            h.status(app.status.clone());
+        } else {
+            if term.is_none() {
+                if let Ok(t) = tui::init_overlay_terminal() {
+                    *term = Some(t);
+                }
+            }
+            if let Some(t) = term.as_mut() {
+                let _ = t.draw(|f| ui::render_overlay(f, app, waveform));
+            }
+        }
+    };
+    let hide_overlay = |native: &Option<overlay::OverlayHandle>, term: &mut Option<tui::TuiTerminal>| {
+        if let Some(h) = native {
+            h.hide();
+        }
+        if let Some(mut t) = term.take() {
+            let _ = tui::restore_terminal(&mut t);
+        }
+    };
 
     while running.load(Ordering::Relaxed) {
         tick = tick.wrapping_add(1);
@@ -591,6 +630,12 @@ async fn run_overlay_loop(
             had_chunk = true;
             if is_recording && !app.paused {
                 waveform.push_chunk(&chunk);
+                if has_native {
+                    if let Some(h) = native_overlay.as_ref() {
+                        let blocks = waveform_to_blocks(&waveform.data(), 48);
+                        h.waveform(blocks);
+                    }
+                }
                 audio_buffer.extend_from_slice(&chunk);
                 app.recording_samples = audio_buffer.len();
                 match vad_engine.process(&chunk) {
@@ -614,6 +659,12 @@ async fn run_overlay_loop(
         if !had_chunk && is_recording && !app.paused {
             if tick % 3 == 0 {
                 waveform.push_level(0);
+                if has_native {
+                    if let Some(h) = native_overlay.as_ref() {
+                        let blocks = waveform_to_blocks(&waveform.data(), 48);
+                        h.waveform(blocks);
+                    }
+                }
             }
         }
 
@@ -621,11 +672,13 @@ async fn run_overlay_loop(
             pending_vad_stop = true;
         }
 
-        // If we have an overlay, adapt width
-        if let Some(term) = overlay.as_mut() {
-            if let Ok(size) = term.size() {
-                let cap = (size.width as usize).saturating_sub(10).clamp(40, 180);
-                waveform.set_capacity(cap);
+        // Adapt width for terminal fallback (native has fixed 48)
+        if !has_native {
+            if let Some(term) = term_overlay.as_mut() {
+                if let Ok(size) = term.size() {
+                    let cap = (size.width as usize).saturating_sub(10).clamp(40, 180);
+                    waveform.set_capacity(cap);
+                }
             }
         }
 
@@ -641,7 +694,12 @@ async fn run_overlay_loop(
             }
             app.recording_samples = audio_buffer.len();
             app.status = "VAD auto-stop — transcribing…".to_string();
-            if let Some(term) = overlay.as_mut() {
+            if has_native {
+                if let Some(h) = native_overlay.as_ref() {
+                    h.set_recording(false);
+                    h.status(app.status.clone());
+                }
+            } else if let Some(term) = term_overlay.as_mut() {
                 let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
             }
             let buf = std::mem::take(&mut audio_buffer);
@@ -651,9 +709,15 @@ async fn run_overlay_loop(
                         app.transcription = r.text.clone();
                         app.raw_text = r.raw.clone();
                         app.latencies = Some(r.latencies);
-                        app.status = r.status;
-                        app.error = r.error;
-                        app.vad_status = r.vad_info;
+                        app.status = r.status.clone();
+                        app.error = r.error.clone();
+                        app.vad_status = r.vad_info.clone();
+                        if has_native {
+                            if let Some(h) = native_overlay.as_ref() {
+                                h.transcription(r.text.clone());
+                                h.status(r.status.clone());
+                            }
+                        }
                         if let Some(bundle) = r.bundle_id {
                             app.app_name = Some(bundle.clone());
                             app.strategy = resolve_strategy_name(&Some(bundle), cfg);
@@ -662,15 +726,28 @@ async fn run_overlay_loop(
                         app.status = "No speech detected — try again".to_string();
                         app.vad_status = "no speech".to_string();
                         app.transcription.clear();
+                        if has_native {
+                            if let Some(h) = native_overlay.as_ref() {
+                                h.status(app.status.clone());
+                            }
+                        }
                     }
                 }
                 Err(e) => {
                     app.error = Some(e.to_string());
                     app.status = "Transcription failed".to_string();
+                    if has_native {
+                        if let Some(h) = native_overlay.as_ref() {
+                            h.status(app.status.clone());
+                        }
+                    }
                 }
             }
-            // Show result briefly, then hide overlay
-            if let Some(term) = overlay.as_mut() {
+            if has_native {
+                if let Some(h) = native_overlay.as_ref() {
+                    h.transcription(app.transcription.clone());
+                }
+            } else if let Some(term) = term_overlay.as_mut() {
                 let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
             }
             result_hold_until = Some(Instant::now() + Duration::from_millis(1400));
@@ -682,18 +759,18 @@ async fn run_overlay_loop(
         match hotkey_manager.try_action() {
             Ok(Some(HotkeyAction::Pressed)) if !is_recording => {
                 if app.paused {
-                    // Briefly show paused overlay
-                    if overlay.is_none() {
-                        match tui::init_overlay_terminal() {
-                            Ok(term) => overlay = Some(term),
-                            Err(e) => tracing::warn!("overlay init failed: {}", e),
+                    // Briefly show paused overlay (native or terminal)
+                    if has_native {
+                        if let Some(h) = native_overlay.as_ref() {
+                            h.show();
+                            h.set_paused(true);
+                            h.set_recording(false);
+                            h.status("⏸ paused — `miccli toggle` to resume".to_string());
                         }
+                    } else {
+                        show_overlay(&app, &waveform, &native_overlay, &mut term_overlay);
                     }
                     app.status = "⏸ paused — `miccli toggle` to resume".to_string();
-                    if let Some(term) = overlay.as_mut() {
-                        let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
-                    }
-                    // Hold paused overlay 1.5s then hide
                     result_hold_until = Some(Instant::now() + Duration::from_millis(1500));
                 } else {
                     is_recording = true;
@@ -705,13 +782,17 @@ async fn run_overlay_loop(
                     app.vad_status = "listening…".to_string();
                     waveform.clear();
                     result_hold_until = None;
-                    if overlay.is_none() {
-                        match tui::init_overlay_terminal() {
-                            Ok(term) => overlay = Some(term),
-                            Err(e) => {
-                                eprintln!("Overlay TUI failed ({}), recording without UI", e);
-                            }
+                    if has_native {
+                        if let Some(h) = native_overlay.as_ref() {
+                            h.show();
+                            h.set_paused(false);
+                            h.set_recording(true);
+                            h.waveform(String::new());
+                            h.transcription("listening…".to_string());
+                            h.status(app.status.clone());
                         }
+                    } else {
+                        show_overlay(&app, &waveform, &native_overlay, &mut term_overlay);
                     }
                     tracing::info!("● recording started (overlay)");
                 }
@@ -726,7 +807,12 @@ async fn run_overlay_loop(
                 }
                 app.recording_samples = audio_buffer.len();
                 app.status = format!("■ stopped ({} samples) — transcribing…", app.recording_samples);
-                if let Some(term) = overlay.as_mut() {
+                if has_native {
+                    if let Some(h) = native_overlay.as_ref() {
+                        h.set_recording(false);
+                        h.status(app.status.clone());
+                    }
+                } else if let Some(term) = term_overlay.as_mut() {
                     let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
                 }
                 let buf = std::mem::take(&mut audio_buffer);
@@ -736,9 +822,15 @@ async fn run_overlay_loop(
                             app.transcription = r.text.clone();
                             app.raw_text = r.raw.clone();
                             app.latencies = Some(r.latencies);
-                            app.status = r.status;
-                            app.error = r.error;
-                            app.vad_status = r.vad_info;
+                            app.status = r.status.clone();
+                            app.error = r.error.clone();
+                            app.vad_status = r.vad_info.clone();
+                            if has_native {
+                                if let Some(h) = native_overlay.as_ref() {
+                                    h.transcription(r.text.clone());
+                                    h.status(r.status.clone());
+                                }
+                            }
                             if let Some(bundle) = r.bundle_id {
                                 app.app_name = Some(bundle.clone());
                                 app.strategy = resolve_strategy_name(&Some(bundle), cfg);
@@ -747,15 +839,28 @@ async fn run_overlay_loop(
                             app.status = "No speech detected — try again".to_string();
                             app.vad_status = "no speech".to_string();
                             app.transcription.clear();
+                            if has_native {
+                                if let Some(h) = native_overlay.as_ref() {
+                                    h.status(app.status.clone());
+                                }
+                            }
                         }
                     }
                     Err(e) => {
                         app.error = Some(e.to_string());
                         app.status = "Transcription failed".to_string();
+                        if has_native {
+                            if let Some(h) = native_overlay.as_ref() {
+                                h.status(app.status.clone());
+                            }
+                        }
                     }
                 }
-                // Show result briefly
-                if let Some(term) = overlay.as_mut() {
+                if has_native {
+                    if let Some(h) = native_overlay.as_ref() {
+                        h.transcription(app.transcription.clone());
+                    }
+                } else if let Some(term) = term_overlay.as_mut() {
                     let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
                 }
                 result_hold_until = Some(Instant::now() + Duration::from_millis(1400));
@@ -765,8 +870,25 @@ async fn run_overlay_loop(
             Err(()) => break,
         }
 
-        // If overlay is active, draw it and handle q via poll
-        if let Some(term) = overlay.as_mut() {
+        // Handle overlay visibility and q-to-quit
+        if has_native {
+            // Native floating window is globally visible (opencode/other terminals).
+            // Terminal where daemon runs stays blank; we still poll it for q to quit daemon.
+            if let Ok(action) = tui::poll_key_action(Duration::from_millis(0)) {
+                if matches!(action, tui::TuiKeyAction::Quit) {
+                    running.store(false, Ordering::Relaxed);
+                    break;
+                }
+            }
+            if !is_recording {
+                if let Some(until) = result_hold_until {
+                    if Instant::now() >= until {
+                        hide_overlay(&native_overlay, &mut term_overlay);
+                        result_hold_until = None;
+                    }
+                }
+            }
+        } else if let Some(term) = term_overlay.as_mut() {
             // Poll for q/Ctrl+C to quit daemon while overlay is up
             if let Ok(action) = tui::poll_key_action(Duration::from_millis(0)) {
                 if matches!(action, tui::TuiKeyAction::Quit) {
@@ -781,34 +903,30 @@ async fn run_overlay_loop(
             if !is_recording {
                 if let Some(until) = result_hold_until {
                     if Instant::now() >= until {
-                        // Hide overlay, back to blank terminal
-                        let mut term = overlay.take().unwrap();
-                        let _ = tui::restore_terminal(&mut term);
+                        hide_overlay(&native_overlay, &mut term_overlay);
                         result_hold_until = None;
-                        // Clean transient state a bit
-                        // Keep transcription for next overlay? Clear after hide
-                        // Keep app.transcription so next press shows previous? We'll keep.
-                    } else {
-                        // Still holding result — keep drawing
                     }
-                } else if waveform.len() == 0 && app.transcription.is_empty() {
-                    // Edge: no pending result, and not recording → hide immediately
-                    // But we only get here if overlay was just created for paused etc
-                    // Let result_hold_until handle
                 }
             }
         } else {
-            // No overlay — check for hold timeout to hide if we had a result
+            // No overlay — check for hold timeout to hide if we had a result (native case already handled)
             if let Some(until) = result_hold_until {
                 if Instant::now() >= until {
                     result_hold_until = None;
+                }
+            }
+            // Also poll for q to quit daemon even when idle (blank terminal)
+            if let Ok(action) = tui::poll_key_action(Duration::from_millis(0)) {
+                if matches!(action, tui::TuiKeyAction::Quit) {
+                    running.store(false, Ordering::Relaxed);
+                    break;
                 }
             }
         }
 
         if is_recording {
             tokio::time::sleep(Duration::from_millis(12)).await;
-        } else if overlay.is_some() {
+        } else if term_overlay.is_some() || has_native && result_hold_until.is_some() {
             tokio::time::sleep(Duration::from_millis(33)).await;
         } else {
             // Idle, no overlay — very low CPU
@@ -817,9 +935,7 @@ async fn run_overlay_loop(
     }
 
     // Ensure overlay is torn down if still up
-    if let Some(mut term) = overlay.take() {
-        let _ = tui::restore_terminal(&mut term);
-    }
+    hide_overlay(&native_overlay, &mut term_overlay);
 
     Ok(())
 }
