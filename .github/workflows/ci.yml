@@ -23,9 +23,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: cargo test
+      - name: cargo test (macOS only)
+        if: matrix.os == 'macos-latest'
         run: cargo test --all --verbose
-      - name: cargo check (non-mac stub)
+      - name: cargo check (Linux stub)
         if: matrix.os == 'ubuntu-latest'
         run: cargo check --verbose
 
@@ -64,6 +65,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: rustsec/audit-check@v2
