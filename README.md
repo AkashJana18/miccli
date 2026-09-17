@@ -121,9 +121,11 @@ Hold **Shift+Control** (default hotkey), speak, release. Text appears in your ac
 mode = "overlay"   # overlay | dashboard | none
 # overlay — minimal top bar only while recording (default)
 # dashboard — persistent 4-tab when `miccli start` (or just use `miccli dashboard`)
-# none — plain logs (`● recording…` / `■ stopped`) even when TTY
+# none — plain logs (`● recording…` / `■ stopped`) even when TTY, still records & inserts
 ```
 Automatically falls back to plain when `stdout` is not a TTY.
+
+> **First run:** miccli asks `Show floating overlay while recording? [1) Yes (default) / 2) No — plain logs]` and saves to `~/.config/miccli/config.toml`. Change anytime by editing `mode` and running `miccli restart [--background]`. Set `MICCLI_NO_PROMPT=1` to skip prompts.
 
 ## Commands
 
@@ -173,8 +175,10 @@ paste_delay_ms = 10
 restore_clipboard = true      # Restore clipboard after paste
 
 [tui]
-mode = "overlay"              # overlay | dashboard | none
+mode = "overlay"              # overlay | dashboard | none — still records & inserts in all modes
 ```
+
+Change overlay anytime: edit `mode` and run `miccli restart [--background]`.
 
 ### App overrides
 

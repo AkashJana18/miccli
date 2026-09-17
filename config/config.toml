@@ -24,4 +24,4 @@ paste_delay_ms = 10
 restore_clipboard = true
 
 [tui]
-mode = "overlay"              # overlay | dashboard | none  — overlay = minimal whisperflow, dashboard = full 4-tab, none = plain logs
+mode = "overlay"              # overlay | dashboard | none — all modes still record & insert; overlay = whisperflow HUD, none = plain logs

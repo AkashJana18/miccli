@@ -209,14 +209,22 @@ pub fn load_config() -> Result<Config> {
     let config_path = config_dir.join("config.toml");
 
     if !config_path.exists() {
-        // First-run: offer LLM opt-in if interactive (TTY) and not in background daemon
+        // First-run: offer LLM + overlay choices if interactive (TTY) and not in background daemon
         if std::io::IsTerminal::is_terminal(&std::io::stdin())
             && std::io::IsTerminal::is_terminal(&std::io::stderr())
             && std::env::var_os("MICCLI_NO_PROMPT").is_none()
         {
-            if let Some(chosen_llm) = prompt_llm_setup()? {
-                let cfg = Config { llm: chosen_llm, ..Default::default() };
-                // Persist the choice so next run doesn't re-prompt
+            let chosen_llm = prompt_llm_setup()?;
+            let chosen_overlay = prompt_overlay_setup()?;
+            // Only write custom config if user made at least one non-default choice
+            if chosen_llm.is_some() || chosen_overlay.is_some() {
+                let mut cfg = Config::default();
+                if let Some(l) = chosen_llm {
+                    cfg.llm = l;
+                }
+                if let Some(mode) = chosen_overlay {
+                    cfg.tui.mode = mode;
+                }
                 if let Err(e) = write_config(&cfg) {
                     tracing::warn!("Failed to write first-run config: {}", e);
                 } else {
@@ -224,9 +232,9 @@ pub fn load_config() -> Result<Config> {
                 }
                 return Ok(cfg);
             }
+            // User accepted all defaults — fall through to write default config
         }
-        tracing::info!("No config found at {}, using defaults (LLM disabled, opt-in)", config_path.display());
-        // Write default config for discoverability (opt-in false)
+        tracing::info!("No config found at {}, using defaults (LLM disabled, overlay enabled)", config_path.display());
         let default_cfg = Config::default();
         let _ = write_config(&default_cfg);
         return Ok(default_cfg);
@@ -247,7 +255,10 @@ fn write_config(cfg: &Config) -> Result<()> {
     let path = dir.join("config.toml");
     let toml_str = toml::to_string(cfg).context("Failed to serialize config")?;
     let header = "# miccli config — edit and restart daemon (`miccli restart`) to apply\n\
-                  # LLM cleanup is opt-in (enabled = false by default). Enable via prompt or set enabled = true\n";
+                  # LLM cleanup is opt-in (enabled = false by default). Enable via prompt or set enabled = true\n\
+                  # tui.mode = \"overlay\" (floating HUD while recording, blank when idle)\n\
+                  #          | \"none\" (no overlay, plain logs — still records & inserts)\n\
+                  #          | \"dashboard\" (full 4-tab TUI, use `miccli dashboard`)\n";
     std::fs::write(&path, header.to_string() + &toml_str).context("Failed to write config")?;
     Ok(())
 }
@@ -309,6 +320,42 @@ fn prompt_llm_setup() -> Result<Option<LlmConfig>> {
         eprintln!("  Run: ollama pull qwen2.5:1.5b  (if not already)");
     }
     Ok(Some(llm))
+}
+
+fn prompt_overlay_setup() -> Result<Option<String>> {
+    use std::io::{self, Write};
+    if std::env::var_os("CI").is_some() {
+        return Ok(None);
+    }
+    eprintln!();
+    eprintln!("Show floating overlay while recording?");
+    eprintln!("  Overlay is a small top bar with waveform + transcription (blank when idle).");
+    eprintln!("  1) Yes — overlay enabled (default, WhisperFlow style)");
+    eprintln!("  2) No  — no overlay, plain logs only (still records & inserts)");
+    eprintln!("  Change anytime: set [tui] mode = \"overlay\" | \"none\" in ~/.config/miccli/config.toml");
+    eprint!("Choice [1-2, default 1]: ");
+    let _ = io::stderr().flush();
+    let input = {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            let _ = io::stdin().read_line(&mut s);
+            let _ = tx.send(s);
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap_or_default()
+    };
+    let choice = input.trim();
+    match choice {
+        "2" | "n" | "N" | "no" | "none" | "off" => {
+            eprintln!("✓ Overlay disabled (mode = \"none\" — plain logs, still records & inserts)");
+            Ok(Some("none".into()))
+        }
+        _ => {
+            // 1, empty, yes, overlay → default
+            eprintln!("✓ Overlay enabled (mode = \"overlay\")");
+            Ok(None)
+        }
+    }
 }
 
 #[cfg(test)]
