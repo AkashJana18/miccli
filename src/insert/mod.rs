@@ -50,10 +50,7 @@ pub fn insert_text(text: &str, config: &InsertionConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn resolve_strategy(
-    bundle_id: &Option<String>,
-    config: &InsertionConfig,
-) -> InsertStrategy {
+fn resolve_strategy(bundle_id: &Option<String>, config: &InsertionConfig) -> InsertStrategy {
     if config.default == "type" {
         return InsertStrategy::Type;
     }
@@ -94,9 +91,9 @@ fn classify_app(bundle_id: &str) -> InsertStrategy {
         | "co.zeit.hyper" => InsertStrategy::Type,
 
         // Electron TUIs — slow typing (Ink/React raw mode)
-        "com.anthropic.claudefordesktop"
-        | "dev.opencode"
-        | "com.openai.codex" => InsertStrategy::Type,
+        "com.anthropic.claudefordesktop" | "dev.opencode" | "com.openai.codex" => {
+            InsertStrategy::Type
+        }
 
         // IDEs — fast paste works fine
         "com.microsoft.VSCode"
@@ -127,7 +124,10 @@ mod tests {
 
     #[test]
     fn test_electron_tuis_use_type() {
-        assert_eq!(classify_app("com.anthropic.claudefordesktop"), InsertStrategy::Type);
+        assert_eq!(
+            classify_app("com.anthropic.claudefordesktop"),
+            InsertStrategy::Type
+        );
         assert_eq!(classify_app("dev.opencode"), InsertStrategy::Type);
         assert_eq!(classify_app("com.openai.codex"), InsertStrategy::Type);
     }
@@ -135,8 +135,14 @@ mod tests {
     #[test]
     fn test_ides_use_paste() {
         assert_eq!(classify_app("com.microsoft.VSCode"), InsertStrategy::Paste);
-        assert_eq!(classify_app("com.jetbrains.intellij"), InsertStrategy::Paste);
-        assert_eq!(classify_app("com.jetbrains.rustrover"), InsertStrategy::Paste);
+        assert_eq!(
+            classify_app("com.jetbrains.intellij"),
+            InsertStrategy::Paste
+        );
+        assert_eq!(
+            classify_app("com.jetbrains.rustrover"),
+            InsertStrategy::Paste
+        );
     }
 
     #[test]
@@ -200,6 +206,9 @@ mod tests {
             restore_clipboard: true,
             apps: vec![],
         };
-        assert_eq!(resolve_strategy(&None, &config), InsertStrategy::ClipboardOnly);
+        assert_eq!(
+            resolve_strategy(&None, &config),
+            InsertStrategy::ClipboardOnly
+        );
     }
 }

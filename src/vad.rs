@@ -150,13 +150,12 @@ impl SileroVad {
         input[CONTEXT_SIZE..].copy_from_slice(chunk);
 
         // Update rolling context: take last 64 samples of this chunk
-        self.context.copy_from_slice(&chunk[CHUNK_SIZE - CONTEXT_SIZE..]);
+        self.context
+            .copy_from_slice(&chunk[CHUNK_SIZE - CONTEXT_SIZE..]);
 
         // Create input tensor [1, 576]
-        let input_tensor = ndarray::Array2::from_shape_vec(
-            (1, CHUNK_SIZE + CONTEXT_SIZE),
-            input.to_vec(),
-        )?;
+        let input_tensor =
+            ndarray::Array2::from_shape_vec((1, CHUNK_SIZE + CONTEXT_SIZE), input.to_vec())?;
 
         // Create state tensor [2, 1, 128]
         let state_data: Vec<f32> = self.state.iter().flatten().copied().collect();
@@ -173,9 +172,7 @@ impl SileroVad {
         ])?;
 
         // Extract speech probability [1, 1]
-        let prob = outputs["output"]
-            .try_extract_tensor::<f32>()?
-            .1[0];
+        let prob = outputs["output"].try_extract_tensor::<f32>()?.1[0];
 
         // Extract updated state [2, 1, 128]
         if let Some(state_out) = outputs.get("stateN") {

@@ -44,7 +44,7 @@ fn get_clipboard() -> Result<String> {
 
 #[cfg(target_os = "macos")]
 fn synth_cmd_v() -> Result<()> {
-    use core_graphics::event::{CGEvent, CGEventTapLocation, CGEventFlags};
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)

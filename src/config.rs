@@ -101,8 +101,12 @@ fn default_hotkey() -> HotkeyConfig {
         modifier: default_hotkey_modifier(),
     }
 }
-fn default_hotkey_key() -> String { "".into() }
-fn default_hotkey_modifier() -> String { "Shift+Control".into() }
+fn default_hotkey_key() -> String {
+    "".into()
+}
+fn default_hotkey_modifier() -> String {
+    "Shift+Control".into()
+}
 
 fn default_whisper() -> WhisperConfig {
     WhisperConfig {
@@ -111,9 +115,15 @@ fn default_whisper() -> WhisperConfig {
         metal: default_metal(),
     }
 }
-fn default_model() -> String { "small".into() }
-fn default_language() -> String { "en".into() }
-fn default_metal() -> bool { true }
+fn default_model() -> String {
+    "small".into()
+}
+fn default_language() -> String {
+    "en".into()
+}
+fn default_metal() -> bool {
+    true
+}
 
 fn default_vad() -> VadConfig {
     VadConfig {
@@ -122,13 +132,25 @@ fn default_vad() -> VadConfig {
         min_silence_ms: default_min_silence_ms(),
     }
 }
-fn default_vad_threshold() -> f32 { 0.5 }
-fn default_min_speech_ms() -> u32 { 250 }
-fn default_min_silence_ms() -> u32 { 500 }
+fn default_vad_threshold() -> f32 {
+    0.5
+}
+fn default_min_speech_ms() -> u32 {
+    250
+}
+fn default_min_silence_ms() -> u32 {
+    500
+}
 
-fn default_llm_provider() -> String { "ollama".into() }
-fn default_true() -> bool { true }
-fn default_llm_enabled() -> bool { false }
+fn default_llm_provider() -> String {
+    "ollama".into()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_llm_enabled() -> bool {
+    false
+}
 
 fn default_llm() -> LlmConfig {
     LlmConfig {
@@ -149,9 +171,15 @@ fn default_insertion() -> InsertionConfig {
         apps: vec![],
     }
 }
-fn default_insertion_strategy() -> String { "auto".into() }
-fn default_key_delay_ms() -> u64 { 20 }
-fn default_paste_delay_ms() -> u64 { 10 }
+fn default_insertion_strategy() -> String {
+    "auto".into()
+}
+fn default_key_delay_ms() -> u64 {
+    20
+}
+fn default_paste_delay_ms() -> u64 {
+    10
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -234,7 +262,10 @@ pub fn load_config() -> Result<Config> {
             }
             // User accepted all defaults — fall through to write default config
         }
-        tracing::info!("No config found at {}, using defaults (LLM disabled, overlay enabled)", config_path.display());
+        tracing::info!(
+            "No config found at {}, using defaults (LLM disabled, overlay enabled)",
+            config_path.display()
+        );
         let default_cfg = Config::default();
         let _ = write_config(&default_cfg);
         return Ok(default_cfg);
@@ -286,7 +317,8 @@ fn prompt_llm_setup() -> Result<Option<LlmConfig>> {
             let _ = io::stdin().read_line(&mut s);
             let _ = tx.send(s);
         });
-        rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap_or_default()
+        rx.recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_default()
     };
     let choice = input.trim();
     let llm = match choice {
@@ -313,9 +345,16 @@ fn prompt_llm_setup() -> Result<Option<LlmConfig>> {
         },
         _ => return Ok(None), // 1, empty, or invalid → disabled
     };
-    eprintln!("✓ LLM enabled: provider={}, model={}", llm.provider, llm.model.as_deref().unwrap_or("default"));
+    eprintln!(
+        "✓ LLM enabled: provider={}, model={}",
+        llm.provider,
+        llm.model.as_deref().unwrap_or("default")
+    );
     if llm.provider == "groq" || llm.provider == "openai" {
-        eprintln!("  Set {} env var before running `miccli start`", llm.api_key_env.as_deref().unwrap_or("API_KEY"));
+        eprintln!(
+            "  Set {} env var before running `miccli start`",
+            llm.api_key_env.as_deref().unwrap_or("API_KEY")
+        );
     } else if llm.provider == "ollama" {
         eprintln!("  Run: ollama pull qwen2.5:1.5b  (if not already)");
     }
@@ -332,7 +371,9 @@ fn prompt_overlay_setup() -> Result<Option<String>> {
     eprintln!("  Overlay is a small top bar with waveform + transcription (blank when idle).");
     eprintln!("  1) Yes — overlay enabled (default, WhisperFlow style)");
     eprintln!("  2) No  — no overlay, plain logs only (still records & inserts)");
-    eprintln!("  Change anytime: set [tui] mode = \"overlay\" | \"none\" in ~/.config/miccli/config.toml");
+    eprintln!(
+        "  Change anytime: set [tui] mode = \"overlay\" | \"none\" in ~/.config/miccli/config.toml"
+    );
     eprint!("Choice [1-2, default 1]: ");
     let _ = io::stderr().flush();
     let input = {
@@ -342,7 +383,8 @@ fn prompt_overlay_setup() -> Result<Option<String>> {
             let _ = io::stdin().read_line(&mut s);
             let _ = tx.send(s);
         });
-        rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap_or_default()
+        rx.recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_default()
     };
     let choice = input.trim();
     match choice {
@@ -421,7 +463,10 @@ strategy = "paste"
         assert_eq!(config.insertion.default, "type");
         assert_eq!(config.insertion.key_delay_ms, 30);
         assert_eq!(config.insertion.apps.len(), 1);
-        assert_eq!(config.insertion.apps[0].bundle_id, "com.anthropic.claudefordesktop");
+        assert_eq!(
+            config.insertion.apps[0].bundle_id,
+            "com.anthropic.claudefordesktop"
+        );
         assert_eq!(config.insertion.apps[0].strategy, "paste");
     }
 

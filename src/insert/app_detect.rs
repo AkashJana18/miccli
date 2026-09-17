@@ -1,4 +1,3 @@
-
 /// Get the bundle identifier of the currently focused application.
 pub fn get_frontmost_bundle_id() -> Option<String> {
     #[cfg(target_os = "macos")]

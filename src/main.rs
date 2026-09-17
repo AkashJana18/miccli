@@ -73,9 +73,7 @@ enum ModelsAction {
         name: String,
     },
     /// Remove a downloaded model
-    Remove {
-        name: String,
-    },
+    Remove { name: String },
 }
 
 fn main() -> Result<()> {
@@ -89,11 +87,17 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Start { background, log_file } => {
+        Commands::Start {
+            background,
+            log_file,
+        } => {
             if background {
                 daemonize(log_file)?;
             } else if let Some(path) = log_file {
-                eprintln!("warning: --log-file is only used with --background, ignoring {}", path.display());
+                eprintln!(
+                    "warning: --log-file is only used with --background, ignoring {}",
+                    path.display()
+                );
             }
             // Duplicate check for foreground (background already checked in daemonize)
             if !background {
@@ -104,7 +108,8 @@ fn main() -> Result<()> {
                 // Keep main thread for Cocoa overlay (global floating window visible on opencode/other terminals).
                 // Run daemon on background thread, main thread services CFRunLoop for overlay + hotkey.
                 let handle = std::thread::spawn(|| {
-                    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                    let rt =
+                        tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                     rt.block_on(daemon::start())
                 });
                 // Main RunLoop — services overlay window and keeps dock icon hidden (Accessory).
@@ -113,11 +118,17 @@ fn main() -> Result<()> {
                 use std::time::Duration;
                 while !handle.is_finished() {
                     unsafe {
-                        CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, Duration::from_millis(50), false);
+                        CFRunLoop::run_in_mode(
+                            kCFRunLoopDefaultMode,
+                            Duration::from_millis(50),
+                            false,
+                        );
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                handle.join().map_err(|_| anyhow::anyhow!("daemon thread panicked"))?
+                handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("daemon thread panicked"))?
             }
             #[cfg(not(target_os = "macos"))]
             {
@@ -132,7 +143,10 @@ fn main() -> Result<()> {
         Commands::Toggle => daemon::send_signal("toggle"),
         Commands::Stop => daemon::send_signal("stop"),
         Commands::Status => daemon::status(),
-        Commands::Restart { background, log_file } => {
+        Commands::Restart {
+            background,
+            log_file,
+        } => {
             // Stop if running (best effort)
             let pid_file = daemon::pid_file_path()?;
             if pid_file.exists() {
@@ -156,27 +170,40 @@ fn main() -> Result<()> {
             if background {
                 daemonize(log_file)?;
             } else if let Some(path) = log_file {
-                eprintln!("warning: --log-file is only used with --background, ignoring {}", path.display());
+                eprintln!(
+                    "warning: --log-file is only used with --background, ignoring {}",
+                    path.display()
+                );
             }
             if !background {
                 check_duplicate_instance()?;
             }
-            println!("Starting daemon{}...", if background { " in background" } else { "" });
+            println!(
+                "Starting daemon{}...",
+                if background { " in background" } else { "" }
+            );
             #[cfg(target_os = "macos")]
             {
                 let handle = std::thread::spawn(|| {
-                    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                    let rt =
+                        tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                     rt.block_on(daemon::start())
                 });
                 use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
                 use std::time::Duration;
                 while !handle.is_finished() {
                     unsafe {
-                        CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, Duration::from_millis(50), false);
+                        CFRunLoop::run_in_mode(
+                            kCFRunLoopDefaultMode,
+                            Duration::from_millis(50),
+                            false,
+                        );
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                handle.join().map_err(|_| anyhow::anyhow!("daemon thread panicked"))?
+                handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("daemon thread panicked"))?
             }
             #[cfg(not(target_os = "macos"))]
             {
@@ -284,13 +311,14 @@ fn daemonize(log_file: Option<std::path::PathBuf>) -> Result<()> {
             }
         }
         // Open log file (append, create) — handle NUL in path gracefully
-        let log_cstr = match std::ffi::CString::new(log_path.to_string_lossy().as_ref().as_bytes().to_vec()) {
-            Ok(c) => c,
-            Err(_) => {
-                tracing::warn!("log path contains NUL, falling back to /dev/null");
-                std::ffi::CString::new("/dev/null").expect("CString /dev/null")
-            }
-        };
+        let log_cstr =
+            match std::ffi::CString::new(log_path.to_string_lossy().as_ref().as_bytes().to_vec()) {
+                Ok(c) => c,
+                Err(_) => {
+                    tracing::warn!("log path contains NUL, falling back to /dev/null");
+                    std::ffi::CString::new("/dev/null").expect("CString /dev/null")
+                }
+            };
         // Ensure parent dir exists
         if let Some(parent) = log_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -369,13 +397,14 @@ fn daemonize(log_file: Option<std::path::PathBuf>) -> Result<()> {
             }
         }
         // Open log file (append, create) — handle NUL in path gracefully
-        let log_cstr = match std::ffi::CString::new(log_path.to_string_lossy().as_ref().as_bytes().to_vec()) {
-            Ok(c) => c,
-            Err(_) => {
-                tracing::warn!("log path contains NUL, falling back to /dev/null");
-                std::ffi::CString::new("/dev/null").expect("CString /dev/null")
-            }
-        };
+        let log_cstr =
+            match std::ffi::CString::new(log_path.to_string_lossy().as_ref().as_bytes().to_vec()) {
+                Ok(c) => c,
+                Err(_) => {
+                    tracing::warn!("log path contains NUL, falling back to /dev/null");
+                    std::ffi::CString::new("/dev/null").expect("CString /dev/null")
+                }
+            };
         // Ensure parent dir exists
         if let Some(parent) = log_path.parent() {
             let _ = std::fs::create_dir_all(parent);

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 
 pub fn list() -> Result<()> {
     let model_dir = model_dir()?;
@@ -33,7 +33,10 @@ pub fn list() -> Result<()> {
 pub fn download(name: &str) -> Result<()> {
     let valid = ["tiny", "base", "small", "medium"];
     if !valid.contains(&name) {
-        anyhow::bail!("Invalid model '{}'. Choose from: tiny, base, small, medium", name);
+        anyhow::bail!(
+            "Invalid model '{}'. Choose from: tiny, base, small, medium",
+            name
+        );
     }
 
     let path = model_path(name)?;

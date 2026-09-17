@@ -1,9 +1,9 @@
 pub mod ui;
 pub mod waveform;
 
-#[allow(unused_imports)]
-pub use waveform::{WaveformHistory, level_to_block, waveform_to_blocks};
 pub use ui::{AppState, LatencyStats, ModelRow};
+#[allow(unused_imports)]
+pub use waveform::{level_to_block, waveform_to_blocks, WaveformHistory};
 
 use anyhow::Result;
 use crossterm::{
@@ -124,11 +124,7 @@ pub fn wants_dashboard(cfg: &crate::config::Config) -> bool {
 }
 
 /// Build initial AppState from config + filesystem.
-pub fn build_initial_state(
-    hotkey: &str,
-    model_name: &str,
-    vad_threshold: f32,
-) -> AppState {
+pub fn build_initial_state(hotkey: &str, model_name: &str, vad_threshold: f32) -> AppState {
     use std::path::PathBuf;
 
     let config_path = crate::config::config_dir()

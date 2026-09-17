@@ -30,7 +30,9 @@ impl WhisperStt {
     }
 
     pub fn transcribe(&self, audio: &[f32]) -> Result<String> {
-        let mut state = self.context.create_state()
+        let mut state = self
+            .context
+            .create_state()
             .context("Failed to create whisper state")?;
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
@@ -43,7 +45,8 @@ impl WhisperStt {
         params.set_suppress_nst(true);
         params.set_token_timestamps(false);
 
-        state.full(params, audio)
+        state
+            .full(params, audio)
             .context("Whisper transcription failed")?;
 
         let num_segments = state.full_n_segments();

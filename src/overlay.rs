@@ -82,7 +82,7 @@ pub fn spawn() -> Option<OverlayHandle> {
 // --- macOS window state (main queue only) ---
 #[cfg(target_os = "macos")]
 mod imp {
-    
+
     use cocoa::base::id;
     use std::sync::OnceLock;
 
@@ -96,14 +96,15 @@ mod imp {
     unsafe impl Sync for WindowState {}
 
     pub(super) static WINDOW: OnceLock<WindowState> = OnceLock::new();
-    pub(super) static VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    pub(super) static VISIBLE: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
 }
 
 #[cfg(target_os = "macos")]
 unsafe fn create_window() -> Option<bool> {
     use cocoa::appkit::{NSBackingStoreType, NSColor, NSScreen, NSWindow, NSWindowStyleMask};
     use cocoa::base::{id, nil, NO, YES};
-    use cocoa::foundation::{NSAutoreleasePool, NSRect, NSSize, NSPoint};
+    use cocoa::foundation::{NSAutoreleasePool, NSPoint, NSRect, NSSize};
     use imp::{WindowState, WINDOW};
 
     if WINDOW.get().is_some() {
@@ -156,14 +157,20 @@ unsafe fn create_window() -> Option<bool> {
         }
 
         let tf_top: id = make_label(
-            NSRect::new(NSPoint::new(14., win_h - 20.), NSSize::new(win_w - 28., 16.)),
+            NSRect::new(
+                NSPoint::new(14., win_h - 20.),
+                NSSize::new(win_w - 28., 16.),
+            ),
             "miccli — idle",
             11.0,
         );
         let _: () = msg_send![content, addSubview: tf_top];
 
         let tf_wave: id = make_label(
-            NSRect::new(NSPoint::new(14., win_h - 50.), NSSize::new(win_w - 28., 28.)),
+            NSRect::new(
+                NSPoint::new(14., win_h - 50.),
+                NSSize::new(win_w - 28., 28.),
+            ),
             "",
             18.0,
         );
@@ -193,8 +200,7 @@ unsafe fn create_window() -> Option<bool> {
 
 #[cfg(target_os = "macos")]
 unsafe fn do_show() {
-    
-    use imp::{WINDOW, VISIBLE};
+    use imp::{VISIBLE, WINDOW};
     use objc::{msg_send, sel, sel_impl};
     if let Some(s) = WINDOW.get() {
         let window: cocoa::base::id = s.window;
@@ -205,7 +211,7 @@ unsafe fn do_show() {
 #[cfg(target_os = "macos")]
 unsafe fn do_hide() {
     use cocoa::base::nil;
-    use imp::{WINDOW, VISIBLE};
+    use imp::{VISIBLE, WINDOW};
     use objc::{msg_send, sel, sel_impl};
     if let Some(s) = WINDOW.get() {
         let window: cocoa::base::id = s.window as _;
@@ -221,7 +227,11 @@ unsafe fn do_set_recording(v: bool) {
     use objc::{msg_send, sel, sel_impl};
     if let Some(s) = WINDOW.get() {
         let tf: cocoa::base::id = s.tf_top as _;
-        let txt = if v { "● REC — hold to talk" } else { "■ idle" };
+        let txt = if v {
+            "● REC — hold to talk"
+        } else {
+            "■ idle"
+        };
         set_label(tf, txt);
         let col: cocoa::base::id = if v {
             NSColor::colorWithRed_green_blue_alpha_(nil, 1.0, 0.35, 0.35, 1.0)
@@ -239,7 +249,11 @@ unsafe fn do_set_paused(v: bool) {
     use objc::{msg_send, sel, sel_impl};
     if let Some(s) = WINDOW.get() {
         let tf: cocoa::base::id = s.tf_top as _;
-        let txt = if v { "⏸ paused — toggle to resume" } else { "miccli — idle" };
+        let txt = if v {
+            "⏸ paused — toggle to resume"
+        } else {
+            "miccli — idle"
+        };
         set_label(tf, txt);
         if v {
             let col: cocoa::base::id =
@@ -268,7 +282,11 @@ unsafe fn do_transcription(s: &str) {
     use imp::WINDOW;
     if let Some(st) = WINDOW.get() {
         let tf: cocoa::base::id = st.tf_bottom as _;
-        let display = if s.is_empty() { "".to_string() } else { format!("\"{}\"", s) };
+        let display = if s.is_empty() {
+            "".to_string()
+        } else {
+            format!("\"{}\"", s)
+        };
         set_label(tf, &display);
     }
 }

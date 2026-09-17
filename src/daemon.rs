@@ -98,11 +98,16 @@ pub async fn start() -> Result<()> {
     tracing::info!("Silero VAD loaded, threshold={}", cfg.vad.threshold);
 
     // Set up hotkey
-    let hotkey_manager = HotkeyManager::new(&cfg.hotkey.key, &cfg.hotkey.modifier, running.clone())?;
+    let hotkey_manager =
+        HotkeyManager::new(&cfg.hotkey.key, &cfg.hotkey.modifier, running.clone())?;
 
     // Start audio capture
     let capture = AudioCapture::new()?;
-    tracing::info!("Audio: {}Hz, {} ch", capture.sample_rate(), capture.channels());
+    tracing::info!(
+        "Audio: {}Hz, {} ch",
+        capture.sample_rate(),
+        capture.channels()
+    );
     let audio_stream = capture.start_capture()?;
     let audio_rx = audio_stream.rx;
 
@@ -254,7 +259,10 @@ pub async fn dashboard() -> Result<()> {
     res
 }
 
-async fn run_dashboard_standalone(cfg: &config::Config, terminal: &mut tui::TuiTerminal) -> Result<()> {
+async fn run_dashboard_standalone(
+    cfg: &config::Config,
+    terminal: &mut tui::TuiTerminal,
+) -> Result<()> {
     use tui::{ui, WaveformHistory};
     let mut app = tui::build_initial_state("Shift+Control", &cfg.whisper.model, cfg.vad.threshold);
     app.mode = tui::AppMode::Dashboard;
@@ -370,7 +378,9 @@ async fn run_plain_loop(
     if paused.load(Ordering::Relaxed) {
         println!("   ⏸ paused — `miccli toggle` to resume");
     }
-    println!("   Press Ctrl+C to quit, `miccli toggle` to pause/resume, `miccli dashboard` for full TUI");
+    println!(
+        "   Press Ctrl+C to quit, `miccli toggle` to pause/resume, `miccli dashboard` for full TUI"
+    );
     println!();
     let _ = std::io::Write::flush(&mut std::io::stdout());
 
@@ -386,14 +396,8 @@ async fn run_plain_loop(
                         tracing::info!("VAD: speech ended, auto-stopping");
                         let buf = std::mem::take(&mut audio_buffer);
                         is_recording = false;
-                        process_and_insert(
-                            &buf,
-                            stt_engine,
-                            vad_engine,
-                            &cfg.llm,
-                            &cfg.insertion,
-                        )
-                        .await?;
+                        process_and_insert(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion)
+                            .await?;
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!("VAD error: {}", e),
@@ -509,14 +513,13 @@ async fn run_dashboard_loop(
             }
         }
 
-        if !had_chunk
-            && tick % 3 == 0 {
-                if is_recording && !app.paused {
-                    waveform.push_level(0);
-                } else if tick % 6 == 0 {
-                    waveform.push_silence();
-                }
+        if !had_chunk && tick % 3 == 0 {
+            if is_recording && !app.paused {
+                waveform.push_level(0);
+            } else if tick % 6 == 0 {
+                waveform.push_silence();
             }
+        }
 
         if vad_triggered && is_recording {
             pending_vad_stop = true;
@@ -534,7 +537,9 @@ async fn run_dashboard_loop(
             app.recording_samples = audio_buffer.len();
             terminal.draw(|f| ui::render_dashboard(f, &app, &waveform))?;
             let buf = std::mem::take(&mut audio_buffer);
-            match process_and_insert_tui(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion).await {
+            match process_and_insert_tui(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion)
+                .await
+            {
                 Ok(res) => {
                     if let Some(r) = res {
                         app.transcription = r.text.clone();
@@ -585,10 +590,15 @@ async fn run_dashboard_loop(
                     waveform.push_chunk(&chunk);
                 }
                 app.recording_samples = audio_buffer.len();
-                app.status = format!("■ stopped ({} samples) — transcribing…", app.recording_samples);
+                app.status = format!(
+                    "■ stopped ({} samples) — transcribing…",
+                    app.recording_samples
+                );
                 terminal.draw(|f| ui::render_dashboard(f, &app, &waveform))?;
                 let buf = std::mem::take(&mut audio_buffer);
-                match process_and_insert_tui(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion).await {
+                match process_and_insert_tui(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion)
+                    .await
+                {
                     Ok(res) => {
                         if let Some(r) = res {
                             app.transcription = r.text.clone();
@@ -685,14 +695,21 @@ async fn run_overlay_loop(
     );
 
     // Helpers for showing/hiding overlay (native or terminal fallback)
-    let show_overlay = |app: &tui::AppState, waveform: &WaveformHistory, native: &Option<overlay::OverlayHandle>, term: &mut Option<tui::TuiTerminal>| {
+    let show_overlay = |app: &tui::AppState,
+                        waveform: &WaveformHistory,
+                        native: &Option<overlay::OverlayHandle>,
+                        term: &mut Option<tui::TuiTerminal>| {
         if let Some(h) = native {
             h.show();
             h.set_recording(app.is_recording);
             h.set_paused(app.paused);
             let blocks = waveform_to_blocks(&waveform.data(), 48);
             h.waveform(blocks);
-            let txt = if app.is_recording { "listening…".to_string() } else { app.transcription.clone() };
+            let txt = if app.is_recording {
+                "listening…".to_string()
+            } else {
+                app.transcription.clone()
+            };
             h.transcription(txt);
             h.status(app.status.clone());
         } else {
@@ -706,7 +723,8 @@ async fn run_overlay_loop(
             }
         }
     };
-    let hide_overlay = |native: &Option<overlay::OverlayHandle>, term: &mut Option<tui::TuiTerminal>| {
+    let hide_overlay = |native: &Option<overlay::OverlayHandle>,
+                        term: &mut Option<tui::TuiTerminal>| {
         if let Some(h) = native {
             h.hide();
         }
@@ -761,16 +779,15 @@ async fn run_overlay_loop(
             }
         }
 
-        if !had_chunk && is_recording && !app.paused
-            && tick % 3 == 0 {
-                waveform.push_level(0);
-                if has_native {
-                    if let Some(h) = native_overlay.as_ref() {
-                        let blocks = waveform_to_blocks(&waveform.data(), 48);
-                        h.waveform(blocks);
-                    }
+        if !had_chunk && is_recording && !app.paused && tick % 3 == 0 {
+            waveform.push_level(0);
+            if has_native {
+                if let Some(h) = native_overlay.as_ref() {
+                    let blocks = waveform_to_blocks(&waveform.data(), 48);
+                    h.waveform(blocks);
                 }
             }
+        }
 
         if vad_triggered && is_recording {
             pending_vad_stop = true;
@@ -807,7 +824,9 @@ async fn run_overlay_loop(
                 let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
             }
             let buf = std::mem::take(&mut audio_buffer);
-            match process_and_insert_tui(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion).await {
+            match process_and_insert_tui(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion)
+                .await
+            {
                 Ok(res) => {
                     if let Some(r) = res {
                         app.transcription = r.text.clone();
@@ -910,7 +929,10 @@ async fn run_overlay_loop(
                     waveform.push_chunk(&chunk);
                 }
                 app.recording_samples = audio_buffer.len();
-                app.status = format!("■ stopped ({} samples) — transcribing…", app.recording_samples);
+                app.status = format!(
+                    "■ stopped ({} samples) — transcribing…",
+                    app.recording_samples
+                );
                 if has_native {
                     if let Some(h) = native_overlay.as_ref() {
                         h.set_recording(false);
@@ -920,7 +942,9 @@ async fn run_overlay_loop(
                     let _ = term.draw(|f| ui::render_overlay(f, &app, &waveform));
                 }
                 let buf = std::mem::take(&mut audio_buffer);
-                match process_and_insert_tui(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion).await {
+                match process_and_insert_tui(&buf, stt_engine, vad_engine, &cfg.llm, &cfg.insertion)
+                    .await
+                {
                     Ok(res) => {
                         if let Some(r) = res {
                             app.transcription = r.text.clone();
@@ -1150,10 +1174,7 @@ async fn process_and_insert_tui(
             ),
             None,
         ),
-        Err(e) => (
-            format!("Inserted with error: {}", e),
-            Some(e.to_string()),
-        ),
+        Err(e) => (format!("Inserted with error: {}", e), Some(e.to_string())),
     };
     // Even if insert failed, we still return text
     if let Err(e) = insert_res {
@@ -1258,7 +1279,15 @@ pub fn status() -> Result<()> {
     if is_process_alive(pid) {
         println!("miccli is running (PID {})", pid);
         println!("PID file: {}", pid_file.display());
-        println!("log: {} {}", log_path.display(), if log_path.exists() { "" } else { "(not yet created)" });
+        println!(
+            "log: {} {}",
+            log_path.display(),
+            if log_path.exists() {
+                ""
+            } else {
+                "(not yet created)"
+            }
+        );
         if log_path.exists() {
             if let Ok(meta) = fs::metadata(&log_path) {
                 println!("log size: {} bytes", meta.len());
@@ -1281,7 +1310,10 @@ pub fn status() -> Result<()> {
             println!("use `miccli stop` to stop, `miccli toggle` to pause/resume, `miccli restart` to restart");
         }
     } else {
-        println!("miccli PID file is stale (PID {} not running), removing", pid);
+        println!(
+            "miccli PID file is stale (PID {} not running), removing",
+            pid
+        );
         let _ = fs::remove_file(&pid_file);
         println!("miccli is not running");
         if log_path.exists() {

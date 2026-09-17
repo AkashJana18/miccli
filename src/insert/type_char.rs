@@ -6,7 +6,6 @@ use std::time::Duration;
 /// Safe for TUIs that use raw mode (Claude Code, Ink, etc.).
 #[cfg(target_os = "macos")]
 pub fn type_text(text: &str, delay_ms: u64) -> Result<()> {
-    
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)

@@ -100,9 +100,11 @@ impl AudioCapture {
                 &self.config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     for frame in data.chunks(source_channels) {
-                        let mono =
-                            frame.iter().map(|&s| s as f32 / i16::MAX as f32).sum::<f32>()
-                                / source_channels as f32;
+                        let mono = frame
+                            .iter()
+                            .map(|&s| s as f32 / i16::MAX as f32)
+                            .sum::<f32>()
+                            / source_channels as f32;
                         push_sample(mono, &sink2, &tx2);
                     }
                 },
@@ -136,17 +138,16 @@ impl AudioCapture {
 
         stream.play().context("Failed to start audio stream")?;
 
-        Ok(AudioStream { rx, _stream: stream })
+        Ok(AudioStream {
+            rx,
+            _stream: stream,
+        })
     }
 }
 
 /// Push one mono frame of raw audio into the shared resampler sink; any
 /// resampled output produced is forwarded to the receiver.
-fn push_sample(
-    sample: f32,
-    sink: &Arc<Mutex<PendingResampler>>,
-    tx: &mpsc::Sender<Vec<f32>>,
-) {
+fn push_sample(sample: f32, sink: &Arc<Mutex<PendingResampler>>, tx: &mpsc::Sender<Vec<f32>>) {
     let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(chunk) = sink.push(sample) {
         if tx.send(chunk).is_err() {
@@ -193,10 +194,7 @@ impl PendingResampler {
         self.pending.push(sample);
         if self.pending.len() >= self.block {
             let input = std::mem::replace(&mut self.pending, Vec::with_capacity(self.block));
-            let resampled = self
-                .resampler
-                .process(&[input], None)
-                .ok()?;
+            let resampled = self.resampler.process(&[input], None).ok()?;
             resampled.into_iter().next().filter(|c| !c.is_empty())
         } else {
             None
@@ -207,8 +205,8 @@ impl PendingResampler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
     use std::time::Duration;
+    use std::time::Instant;
 
     /// Captures a short burst of real audio from the default input device and
     /// asserts that frames actually arrive. Run with `--ignored` since it needs

@@ -92,14 +92,14 @@ pub async fn llm_cleanup(text: &str, config: &crate::config::LlmConfig) -> Optio
     {
         Ok(response) => {
             if !response.status().is_success() {
-                tracing::warn!(
-                    "LLM cleanup failed: HTTP {}",
-                    response.status()
-                );
+                tracing::warn!("LLM cleanup failed: HTTP {}", response.status());
                 return None;
             }
             match response.json::<ChatResponse>().await {
-                Ok(resp) => resp.choices.first().map(|c| c.message.content.trim().to_string()),
+                Ok(resp) => resp
+                    .choices
+                    .first()
+                    .map(|c| c.message.content.trim().to_string()),
                 Err(e) => {
                     tracing::warn!("Failed to parse LLM response: {}", e);
                     None
@@ -116,21 +116,22 @@ pub async fn llm_cleanup(text: &str, config: &crate::config::LlmConfig) -> Optio
 fn resolve_provider(config: &crate::config::LlmConfig) -> Option<(String, String, String)> {
     match config.provider.as_str() {
         "ollama" => {
-            let base = config.base_url.as_deref().unwrap_or("http://localhost:11434");
+            let base = config
+                .base_url
+                .as_deref()
+                .unwrap_or("http://localhost:11434");
             let model = config.model.as_deref().unwrap_or("qwen2.5:1.5b");
             Some((base.to_string(), "ollama".into(), model.to_string()))
         }
         "groq" => {
-            let key = std::env::var(
-                config.api_key_env.as_deref().unwrap_or("GROQ_API_KEY"),
-            ).ok()?;
+            let key =
+                std::env::var(config.api_key_env.as_deref().unwrap_or("GROQ_API_KEY")).ok()?;
             let model = config.model.as_deref().unwrap_or("llama-3.1-8b-instant");
             Some(("https://api.groq.com/openai".into(), key, model.to_string()))
         }
         "openai" => {
-            let key = std::env::var(
-                config.api_key_env.as_deref().unwrap_or("OPENAI_API_KEY"),
-            ).ok()?;
+            let key =
+                std::env::var(config.api_key_env.as_deref().unwrap_or("OPENAI_API_KEY")).ok()?;
             let model = config.model.as_deref().unwrap_or("gpt-4o-mini");
             Some(("https://api.openai.com".into(), key, model.to_string()))
         }

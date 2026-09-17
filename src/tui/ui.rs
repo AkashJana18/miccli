@@ -2,9 +2,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        Block, BorderType, Borders, Cell, Paragraph, Row, Sparkline, Table, Tabs, Wrap,
-    },
+    widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Sparkline, Table, Tabs, Wrap},
     Frame,
 };
 
@@ -221,14 +219,36 @@ pub fn render_overlay(frame: &mut Frame, app: &AppState, waveform: &WaveformHist
     // Header line: hotkey + app + strategy (+ paused)
     let header_line = if app.paused {
         Line::from(vec![
-            Span::styled(" ⏸ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled("paused", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  {}  ", app.hotkey), Style::default().fg(Color::DarkGray)),
-            Span::styled("toggle to resume", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+            Span::styled(
+                " ⏸ ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "paused",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}  ", app.hotkey),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                "toggle to resume",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ),
         ])
     } else {
         let dot = if app.is_recording {
-            if app.tick % 10 < 5 { "●" } else { "○" }
+            if app.tick % 10 < 5 {
+                "●"
+            } else {
+                "○"
+            }
         } else {
             "■"
         };
@@ -239,13 +259,36 @@ pub fn render_overlay(frame: &mut Frame, app: &AppState, waveform: &WaveformHist
         };
         let app_name = app.app_name.as_deref().unwrap_or("—");
         Line::from(vec![
-            Span::styled(format!(" {} {}  ", dot, if app.is_recording { "REC" } else { "IDLE" }), rec_style),
-            Span::styled(format!("{}  ", app.hotkey), Style::default().fg(Color::Yellow)),
-            Span::styled(format!("{}  ", app_name), Style::default().fg(Color::DarkGray)),
-            Span::styled(strategy_icon(&app.strategy), Style::default().fg(match app.strategy.as_str() { "type" => Color::Magenta, "paste" => Color::Green, _ => Color::DarkGray })),
+            Span::styled(
+                format!(
+                    " {} {}  ",
+                    dot,
+                    if app.is_recording { "REC" } else { "IDLE" }
+                ),
+                rec_style,
+            ),
+            Span::styled(
+                format!("{}  ", app.hotkey),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled(
+                format!("{}  ", app_name),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                strategy_icon(&app.strategy),
+                Style::default().fg(match app.strategy.as_str() {
+                    "type" => Color::Magenta,
+                    "paste" => Color::Green,
+                    _ => Color::DarkGray,
+                }),
+            ),
         ])
     };
-    frame.render_widget(Paragraph::new(header_line).alignment(Alignment::Left), inner_chunks[0]);
+    frame.render_widget(
+        Paragraph::new(header_line).alignment(Alignment::Left),
+        inner_chunks[0],
+    );
 
     // Waveform line (inline blocks)
     let data = waveform.data();
@@ -261,7 +304,13 @@ pub fn render_overlay(frame: &mut Frame, app: &AppState, waveform: &WaveformHist
     };
     let wf_color = if app.is_recording {
         let max = waveform.max_level();
-        if max > 70 { Color::Red } else if max > 35 { Color::Yellow } else { Color::Cyan }
+        if max > 70 {
+            Color::Red
+        } else if max > 35 {
+            Color::Yellow
+        } else {
+            Color::Cyan
+        }
     } else {
         Color::DarkGray
     };
@@ -281,19 +330,33 @@ pub fn render_overlay(frame: &mut Frame, app: &AppState, waveform: &WaveformHist
     } else if !app.transcription.is_empty() {
         let mut lines = vec![Line::from(vec![Span::styled(
             format!("\"{}\"", app.transcription),
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )])];
         if !app.raw_text.is_empty() && app.raw_text != app.transcription {
             lines.push(Line::from(vec![
-                Span::styled("raw: ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
-                Span::styled(format!("\"{}\"", app.raw_text), Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC)),
+                Span::styled(
+                    "raw: ",
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+                Span::styled(
+                    format!("\"{}\"", app.raw_text),
+                    Style::default()
+                        .fg(Color::Gray)
+                        .add_modifier(Modifier::ITALIC),
+                ),
             ]));
         }
         Paragraph::new(lines).wrap(Wrap { trim: true })
     } else if app.is_recording {
         Paragraph::new(Line::from(vec![Span::styled(
             "  listening… speak now",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
         )]))
     } else if !app.status.is_empty() {
         Paragraph::new(Line::from(vec![Span::styled(
@@ -310,11 +373,18 @@ pub fn render_overlay(frame: &mut Frame, app: &AppState, waveform: &WaveformHist
     let footer = if app.is_recording {
         Line::from(vec![Span::styled(
             "  hold to talk — release to transcribe",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
         )])
     } else {
         Line::from(vec![
-            Span::styled(" toggle", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " toggle",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" pause  ", Style::default().fg(Color::DarkGray)),
         ])
     };
@@ -332,14 +402,23 @@ fn render_header(frame: &mut Frame, area: Rect, app: &AppState) {
 
     // Pulse dot when recording (tick toggles)
     let dot = if app.is_recording {
-        if app.tick % 10 < 5 { "●" } else { "○" }
+        if app.tick % 10 < 5 {
+            "●"
+        } else {
+            "○"
+        }
     } else {
         "■"
     };
     let rec_label = if app.is_recording { "REC" } else { "IDLE" };
 
     let left = Line::from(vec![
-        Span::styled("  ◉ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  ◉ ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             "miccli",
             Style::default()
@@ -350,10 +429,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &AppState) {
             format!("  v{}  ", app.version),
             Style::default().fg(Color::DarkGray),
         ),
-        Span::styled(
-            format!("{} {}", dot, rec_label),
-            recording_style,
-        ),
+        Span::styled(format!("{} {}", dot, rec_label), recording_style),
         Span::styled(
             format!("  {}  ", app.hotkey),
             Style::default()
@@ -382,9 +458,10 @@ fn render_header(frame: &mut Frame, area: Rect, app: &AppState) {
         } else {
             Color::DarkGray
         }))
-        .title(Line::from(vec![
-            Span::styled(" miccli — voice dictation ", Style::default().fg(Color::Cyan)),
-        ]))
+        .title(Line::from(vec![Span::styled(
+            " miccli — voice dictation ",
+            Style::default().fg(Color::Cyan),
+        )]))
         .title_alignment(Alignment::Center);
 
     let inner = header_block.inner(area);
@@ -401,11 +478,21 @@ fn render_header(frame: &mut Frame, area: Rect, app: &AppState) {
     let strat_line = Line::from(vec![
         Span::styled(
             right_text,
-            Style::default().fg(strategy_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(strategy_color)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            if app.model_installed { "● model ready" } else { "○ model missing" },
-            Style::default().fg(if app.model_installed { Color::Green } else { Color::Red }),
+            if app.model_installed {
+                "● model ready"
+            } else {
+                "○ model missing"
+            },
+            Style::default().fg(if app.model_installed {
+                Color::Green
+            } else {
+                Color::Red
+            }),
         ),
     ]);
     let right_para = Paragraph::new(strat_line).alignment(Alignment::Right);
@@ -422,10 +509,7 @@ fn strategy_icon(s: &str) -> &'static str {
 }
 
 fn render_tabs(frame: &mut Frame, area: Rect, app: &AppState) {
-    let titles: Vec<Line> = Tab::all()
-        .iter()
-        .map(|t| Line::from(t.title()))
-        .collect();
+    let titles: Vec<Line> = Tab::all().iter().map(|t| Line::from(t.title())).collect();
 
     let tabs = Tabs::new(titles)
         .block(
@@ -491,7 +575,11 @@ fn render_waveform(frame: &mut Frame, area: Rect, app: &AppState, waveform: &Wav
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if app.is_recording { color } else { Color::DarkGray }))
+        .border_style(Style::default().fg(if app.is_recording {
+            color
+        } else {
+            Color::DarkGray
+        }))
         .title(title)
         .title_style(Style::default().fg(color).add_modifier(Modifier::BOLD));
 
@@ -513,7 +601,9 @@ fn render_waveform(frame: &mut Frame, area: Rect, app: &AppState, waveform: &Wav
     if data.is_empty() {
         let hint = Paragraph::new(Line::from(vec![Span::styled(
             "  ──  no audio yet  ──  hold Shift+Control and speak  ──",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
         )]))
         .alignment(Alignment::Center);
         frame.render_widget(hint, spark_area);
@@ -617,10 +707,7 @@ fn render_transcription(frame: &mut Frame, area: Rect, app: &AppState) {
                 ),
             ]),
         ];
-        frame.render_widget(
-            Paragraph::new(lines).wrap(Wrap { trim: true }),
-            inner,
-        );
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
         return;
     }
 
@@ -640,10 +727,17 @@ fn render_transcription(frame: &mut Frame, area: Rect, app: &AppState) {
 
     if !app.raw_text.is_empty() && app.raw_text != app.transcription {
         lines.push(Line::from(vec![
-            Span::styled("raw: ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+            Span::styled(
+                "raw: ",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ),
             Span::styled(
                 format!("\"{}\"", app.raw_text),
-                Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::ITALIC),
             ),
         ]));
         lines.push(Line::from(""));
@@ -696,7 +790,9 @@ fn render_stats(frame: &mut Frame, area: Rect, app: &AppState) {
                 Span::styled("  transcribe  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("{:>6.0?}", lat.transcribe),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("   cleanup  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
@@ -713,7 +809,9 @@ fn render_stats(frame: &mut Frame, area: Rect, app: &AppState) {
                 Span::styled("   total    ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("{:>6.0?}", lat.total),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]),
         ]
@@ -721,13 +819,17 @@ fn render_stats(frame: &mut Frame, area: Rect, app: &AppState) {
         vec![
             Line::from(vec![Span::styled(
                 "  No run yet — hold hotkey to transcribe",
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
             )]),
             Line::from(vec![
                 Span::styled("  model: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     &app.model_name,
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("   VAD: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
@@ -759,13 +861,17 @@ fn render_stats(frame: &mut Frame, area: Rect, app: &AppState) {
             Span::styled("  app  ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 name.clone(),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
         ])
     } else {
         Line::from(vec![Span::styled(
             "  app  (detecting frontmost…)",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
         )])
     };
 
@@ -773,11 +879,13 @@ fn render_stats(frame: &mut Frame, area: Rect, app: &AppState) {
         Span::styled("  via  ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("{}  ", app.strategy),
-            Style::default().fg(match app.strategy.as_str() {
-                "type" => Color::Magenta,
-                "paste" => Color::Green,
-                _ => Color::Yellow,
-            }).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(match app.strategy.as_str() {
+                    "type" => Color::Magenta,
+                    "paste" => Color::Green,
+                    _ => Color::Yellow,
+                })
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             match app.strategy.as_str() {
@@ -802,7 +910,11 @@ fn render_models(frame: &mut Frame, area: Rect, app: &AppState) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title(" whisper models — stored in ~/.config/miccli/models/ ")
-        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .padding(ratatui::widgets::Padding::horizontal(1));
 
     let inner = block.inner(area);
@@ -813,10 +925,30 @@ fn render_models(frame: &mut Frame, area: Rect, app: &AppState) {
     }
 
     let header = Row::new(vec![
-        Cell::from(Span::styled("  model", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-        Cell::from(Span::styled("size", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-        Cell::from(Span::styled("status", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-        Cell::from(Span::styled("path", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
+        Cell::from(Span::styled(
+            "  model",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Cell::from(Span::styled(
+            "size",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Cell::from(Span::styled(
+            "status",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Cell::from(Span::styled(
+            "path",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
     ])
     .height(1)
     .bottom_margin(1);
@@ -827,11 +959,17 @@ fn render_models(frame: &mut Frame, area: Rect, app: &AppState) {
         .map(|m| {
             let is_active = m.name == app.model_name;
             let name_style = if is_active {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
-            let status = if m.installed { "installed" } else { "not installed" };
+            let status = if m.installed {
+                "installed"
+            } else {
+                "not installed"
+            };
             let status_style = if m.installed {
                 Style::default().fg(Color::Green)
             } else {
@@ -842,7 +980,10 @@ fn render_models(frame: &mut Frame, area: Rect, app: &AppState) {
                 Cell::from(Span::styled(format!("{}{}", marker, m.name), name_style)),
                 Cell::from(Span::styled(m.size, Style::default().fg(Color::DarkGray))),
                 Cell::from(Span::styled(status, status_style)),
-                Cell::from(Span::styled(m.path.clone(), Style::default().fg(Color::DarkGray))),
+                Cell::from(Span::styled(
+                    m.path.clone(),
+                    Style::default().fg(Color::DarkGray),
+                )),
             ])
         })
         .collect();
@@ -872,7 +1013,10 @@ fn render_models(frame: &mut Frame, area: Rect, app: &AppState) {
         let hint = Paragraph::new(Line::from(vec![
             Span::styled("  ▶ active model  ", Style::default().fg(Color::Yellow)),
             Span::styled("•  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("miccli models download <tiny|base|small|medium>", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                "miccli models download <tiny|base|small|medium>",
+                Style::default().fg(Color::Cyan),
+            ),
         ]))
         .alignment(Alignment::Left);
         frame.render_widget(hint, hint_area);
@@ -885,7 +1029,11 @@ fn render_config(frame: &mut Frame, area: Rect, app: &AppState) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Yellow))
         .title(format!(" config — {} ", app.config_path))
-        .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
         .padding(ratatui::widgets::Padding::horizontal(1));
 
     let inner = block.inner(area);
@@ -902,9 +1050,19 @@ fn render_config(frame: &mut Frame, area: Rect, app: &AppState) {
         .map(|l| {
             let trimmed = l.trim();
             if trimmed.starts_with('[') {
-                Line::from(Span::styled(l.to_string(), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)))
+                Line::from(Span::styled(
+                    l.to_string(),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ))
             } else if trimmed.starts_with('#') || trimmed.is_empty() {
-                Line::from(Span::styled(l.to_string(), Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)))
+                Line::from(Span::styled(
+                    l.to_string(),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                ))
             } else if trimmed.contains('=') {
                 let parts: Vec<&str> = l.splitn(2, '=').collect();
                 if parts.len() == 2 {
@@ -914,10 +1072,16 @@ fn render_config(frame: &mut Frame, area: Rect, app: &AppState) {
                         Span::styled(parts[1].to_string(), Style::default().fg(Color::Yellow)),
                     ])
                 } else {
-                    Line::from(Span::styled(l.to_string(), Style::default().fg(Color::White)))
+                    Line::from(Span::styled(
+                        l.to_string(),
+                        Style::default().fg(Color::White),
+                    ))
                 }
             } else {
-                Line::from(Span::styled(l.to_string(), Style::default().fg(Color::Gray)))
+                Line::from(Span::styled(
+                    l.to_string(),
+                    Style::default().fg(Color::Gray),
+                ))
             }
         })
         .collect();
@@ -935,7 +1099,11 @@ fn render_help(frame: &mut Frame, area: Rect, _app: &AppState) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Green))
         .title(" help — keys & permissions ")
-        .title_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )
         .padding(ratatui::widgets::Padding::horizontal(1));
 
     let inner = block.inner(area);
@@ -945,46 +1113,94 @@ fn render_help(frame: &mut Frame, area: Rect, _app: &AppState) {
         Line::from(""),
         Line::from(vec![Span::styled(
             "  Keys",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         )]),
         Line::from(vec![
-            Span::styled("    Shift+Control  ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled("hold to record, release to transcribe & insert", Style::default().fg(Color::White)),
+            Span::styled(
+                "    Shift+Control  ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "hold to record, release to transcribe & insert",
+                Style::default().fg(Color::White),
+            ),
         ]),
         Line::from(vec![
-            Span::styled("    Tab / Shift+Tab", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "    Tab / Shift+Tab",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  next / prev tab", Style::default().fg(Color::White)),
-            Span::styled("    1 2 3 4", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled("  jump to Live / Models / Config / Help", Style::default().fg(Color::White)),
+            Span::styled(
+                "    1 2 3 4",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "  jump to Live / Models / Config / Help",
+                Style::default().fg(Color::White),
+            ),
         ]),
         Line::from(vec![
-            Span::styled("    q / Ctrl+C    ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "    q / Ctrl+C    ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("quit", Style::default().fg(Color::White)),
         ]),
         Line::from(""),
         Line::from(vec![Span::styled(
             "  Insertion",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         )]),
         Line::from(vec![Span::styled(
             "    miccli detects the frontmost app and picks the right strategy:",
             Style::default().fg(Color::White),
         )]),
         Line::from(vec![
-            Span::styled("      ⌨ type", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            Span::styled("  — terminals & Electron TUIs (opencode, Codex, Claude) — slow char typing avoids", Style::default().fg(Color::Gray)),
+            Span::styled(
+                "      ⌨ type",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "  — terminals & Electron TUIs (opencode, Codex, Claude) — slow char typing avoids",
+                Style::default().fg(Color::Gray),
+            ),
         ]),
         Line::from(vec![Span::styled(
             "               “[Pasted text]” collapse",
             Style::default().fg(Color::Gray),
         )]),
         Line::from(vec![
-            Span::styled("      ⎘ paste", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled(" — IDEs & editors (VS Code, IntelliJ, Sublime) — fast clipboard", Style::default().fg(Color::Gray)),
+            Span::styled(
+                "      ⎘ paste",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " — IDEs & editors (VS Code, IntelliJ, Sublime) — fast clipboard",
+                Style::default().fg(Color::Gray),
+            ),
         ]),
         Line::from(vec![Span::styled(
             "    Override per-app in ~/.config/miccli/config.toml:",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
         )]),
         Line::from(vec![Span::styled(
             "      [[insertion.apps]]  bundle_id = \"dev.opencode\"  strategy = \"type\"",
@@ -993,24 +1209,46 @@ fn render_help(frame: &mut Frame, area: Rect, _app: &AppState) {
         Line::from(""),
         Line::from(vec![Span::styled(
             "  Permissions (macOS)",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         )]),
         Line::from(vec![
-            Span::styled("    Microphone", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled(" — auto-prompted on first run", Style::default().fg(Color::White)),
+            Span::styled(
+                "    Microphone",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " — auto-prompted on first run",
+                Style::default().fg(Color::White),
+            ),
         ]),
         Line::from(vec![
-            Span::styled("    Accessibility", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled(" — System Settings → Privacy & Security → Accessibility → allow miccli", Style::default().fg(Color::White)),
+            Span::styled(
+                "    Accessibility",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " — System Settings → Privacy & Security → Accessibility → allow miccli",
+                Style::default().fg(Color::White),
+            ),
         ]),
         Line::from(vec![Span::styled(
             "      Without it: hotkey won’t fire and text insertion will fail.",
-            Style::default().fg(Color::Red).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::ITALIC),
         )]),
         Line::from(""),
         Line::from(vec![Span::styled(
             "  Tips",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         )]),
         Line::from(vec![Span::styled(
             "    • Say “open curly brace”, “close paren”, “fat arrow”, “semicolon” for code.",
@@ -1040,18 +1278,53 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &AppState) {
         Tab::Help => "help: keys & perms",
     };
     let line = Line::from(vec![
-        Span::styled(" q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::styled(" quit  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("tab", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::styled(" switch  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("1-4", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::styled(" jump  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("⇧^ hold", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Span::styled(" talk  ", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("│ {}", tab_hint), Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
         Span::styled(
-            format!(" │ miccli v{}  •  {} ", app.version, if app.is_recording { "● REC" } else { "■ idle" }),
-            Style::default().fg(if app.is_recording { Color::Red } else { Color::DarkGray }),
+            " q",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" quit  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "tab",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" switch  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "1-4",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" jump  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "⇧^ hold",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" talk  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("│ {}", tab_hint),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+        ),
+        Span::styled(
+            format!(
+                " │ miccli v{}  •  {} ",
+                app.version,
+                if app.is_recording {
+                    "● REC"
+                } else {
+                    "■ idle"
+                }
+            ),
+            Style::default().fg(if app.is_recording {
+                Color::Red
+            } else {
+                Color::DarkGray
+            }),
         ),
     ]);
     let para = Paragraph::new(line).alignment(Alignment::Center);
@@ -1115,9 +1388,7 @@ mod tests {
     fn render_to_string(app: &AppState, waveform: &WaveformHistory) -> String {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| render(f, app, waveform))
-            .unwrap();
+        terminal.draw(|f| render(f, app, waveform)).unwrap();
         // Convert buffer to string for snapshot-ish check
         let buffer = terminal.backend().buffer().clone();
         let mut out = String::new();

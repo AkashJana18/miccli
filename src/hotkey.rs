@@ -176,8 +176,7 @@ fn spawn_tap(
                     // If the OS disables our tap, it means Accessibility permission
                     // is missing or was revoked — surface a useful message.
                     match etype {
-                        CGEventType::TapDisabledByTimeout
-                        | CGEventType::TapDisabledByUserInput => {
+                        CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
                             tracing::warn!(
                                 "Event tap disabled by system — grant miccli Accessibility \
                                  permission (System Settings > Privacy & Security > Accessibility)"
@@ -243,11 +242,12 @@ fn is_active(
     match keycode {
         None => {
             // Modifier-only hold: active when all configured modifiers are set.
-            if matches!(etype, CGEventType::FlagsChanged)
-                || is_any_key_event(etype)
-            {
-                
-                if mods.is_empty() { false } else { flags.contains(mods) }
+            if matches!(etype, CGEventType::FlagsChanged) || is_any_key_event(etype) {
+                if mods.is_empty() {
+                    false
+                } else {
+                    flags.contains(mods)
+                }
             } else {
                 false
             }
@@ -255,7 +255,11 @@ fn is_active(
         Some(kc) => {
             if is_any_key_event(etype) {
                 let key_ok = event.get_integer_value_field(9) as u16 == kc;
-                let mods_ok = if mods.is_empty() { true } else { flags.contains(mods) };
+                let mods_ok = if mods.is_empty() {
+                    true
+                } else {
+                    flags.contains(mods)
+                };
                 key_ok && mods_ok
             } else {
                 false
@@ -334,8 +338,7 @@ fn parse_modifiers(modifier: &str) -> CGEventFlags {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn parse_modifiers(_modifier: &str) -> () {
-}
+fn parse_modifiers(_modifier: &str) -> () {}
 
 fn parse_key(key: &str) -> Result<Option<u16>> {
     let k = key.trim();
