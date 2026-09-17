@@ -352,6 +352,7 @@ fn setup_termination_handler(running: Arc<AtomicBool>) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_plain_loop(
     cfg: &config::Config,
     stt_engine: &stt::WhisperStt,
@@ -435,6 +436,7 @@ async fn run_plain_loop(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_dashboard_loop(
     cfg: &config::Config,
     stt_engine: &stt::WhisperStt,

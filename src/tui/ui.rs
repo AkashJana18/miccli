@@ -180,9 +180,7 @@ pub fn render_overlay(frame: &mut Frame, app: &AppState, waveform: &WaveformHist
 
     let border_col = if app.paused {
         Color::Yellow
-    } else if app.is_recording {
-        Color::Red
-    } else if app.error.is_some() {
+    } else if app.is_recording || app.error.is_some() {
         Color::Red
     } else {
         Color::Cyan

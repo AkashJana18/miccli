@@ -55,7 +55,7 @@ pub fn apply(text: &str) -> String {
         ("dash", "-"),
         ("pipe", "|"),
     ];
-    replacements.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    replacements.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
 
     for (spoken, symbol) in &replacements {
         result = result.replace(spoken, symbol);
