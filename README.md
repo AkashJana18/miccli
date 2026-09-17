@@ -1,4 +1,4 @@
-# miccli
+# 🎙️ Miccli
 
 [![CI](https://github.com/AkashJana18/miccli/actions/workflows/ci.yml/badge.svg)](https://github.com/AkashJana18/miccli/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/github/v/tag/AkashJana18/miccli?label=version&sort=semver)](https://github.com/AkashJana18/miccli/releases)
@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#requirements)
 
-Terminal voice dictation for macOS. Hold a hotkey, speak, release — transcribed text is inserted into the focused application. Runs fully offline with local Whisper.
+Terminal voice dictation for macOS. Hold a hotkey, speak, release then transcribed text is inserted into the focused application. Runs fully offline with local Whisper.
 
 ## Features
 
