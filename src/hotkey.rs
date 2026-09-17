@@ -1,12 +1,14 @@
 use anyhow::{Context, Result};
-use core_graphics::event::{
-    CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
-    CGEventType, CallbackResult,
-};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+
+#[cfg(target_os = "macos")]
+use core_graphics::event::{
+    CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+    CGEventType, CallbackResult,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyAction {
@@ -14,6 +16,9 @@ pub enum HotkeyAction {
     Released,
 }
 
+// ── macOS implementation ───────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
 pub struct HotkeyManager {
     rx: Receiver<HotkeyAction>,
     running: Arc<AtomicBool>,
@@ -21,6 +26,7 @@ pub struct HotkeyManager {
     combo: String,
 }
 
+#[cfg(target_os = "macos")]
 impl HotkeyManager {
     /// Sets up a global hotkey. `modifier` is a `+`-separated list of
     /// Command / Option / Control / Shift. If `key` is empty the hotkey is
@@ -85,6 +91,7 @@ impl HotkeyManager {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl Drop for HotkeyManager {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
@@ -94,10 +101,53 @@ impl Drop for HotkeyManager {
     }
 }
 
+// ── Non-macOS stub (macOS only per README) ────────────────────────────
+
+#[cfg(not(target_os = "macos"))]
+pub struct HotkeyManager {
+    combo: String,
+    running: Arc<AtomicBool>,
+}
+
+#[cfg(not(target_os = "macos"))]
+impl HotkeyManager {
+    pub fn new(_key: &str, _modifier: &str, running: Arc<AtomicBool>) -> Result<Self> {
+        anyhow::bail!(
+            "Global hotkey is only supported on macOS (requires CGEventTap + Accessibility permission). \
+             miccli currently supports macOS only."
+        );
+        // Keep running alive for Drop semantics check, but we never get here
+        #[allow(unreachable_code)]
+        Ok(Self {
+            combo: _modifier.to_string(),
+            running,
+        })
+    }
+
+    pub fn wait_for_action(&self) -> Result<Option<HotkeyAction>, ()> {
+        // On non-macOS we never produce events; sleep briefly to avoid busy-loop if somehow called
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        Ok(None)
+    }
+
+    pub fn try_action(&self) -> Result<Option<HotkeyAction>, ()> {
+        Ok(None)
+    }
+
+    pub fn combo(&self) -> &str {
+        &self.combo
+    }
+
+    pub fn stop(&self) {
+        self.running.store(false, Ordering::Relaxed);
+    }
+}
+
 fn rx_running_clone(running: &Arc<AtomicBool>) -> Arc<AtomicBool> {
     Arc::clone(running)
 }
 
+#[cfg(target_os = "macos")]
 fn spawn_tap(
     mods: CGEventFlags,
     keycode: Option<u16>,
@@ -181,6 +231,7 @@ fn spawn_tap(
 
 /// Returns whether the event indicates the target hotkey combo is currently
 /// held (active).
+#[cfg(target_os = "macos")]
 fn is_active(
     etype: CGEventType,
     event: &CGEvent,
@@ -195,8 +246,8 @@ fn is_active(
             if matches!(etype, CGEventType::FlagsChanged)
                 || is_any_key_event(etype)
             {
-                let all = if mods.is_empty() { false } else { flags.contains(mods) };
-                all
+                
+                if mods.is_empty() { false } else { flags.contains(mods) }
             } else {
                 false
             }
@@ -213,10 +264,12 @@ fn is_active(
     }
 }
 
+#[cfg(target_os = "macos")]
 fn is_any_key_event(etype: CGEventType) -> bool {
     matches!(etype, CGEventType::KeyDown | CGEventType::KeyUp)
 }
 
+#[cfg(target_os = "macos")]
 fn describe(mods: CGEventFlags, keycode: Option<u16>) -> String {
     let mut parts: Vec<String> = Vec::new();
     if mods.contains(CGEventFlags::CGEventFlagCommand) {
@@ -241,6 +294,7 @@ fn describe(mods: CGEventFlags, keycode: Option<u16>) -> String {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn keycode_to_name(kc: u16) -> String {
     use core_graphics::event::KeyCode as K;
     match kc {
@@ -264,6 +318,7 @@ fn keycode_to_name(kc: u16) -> String {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn parse_modifiers(modifier: &str) -> CGEventFlags {
     let mut mods = CGEventFlags::empty();
     for raw in modifier.split('+') {
@@ -278,96 +333,108 @@ fn parse_modifiers(modifier: &str) -> CGEventFlags {
     mods
 }
 
+#[cfg(not(target_os = "macos"))]
+fn parse_modifiers(_modifier: &str) -> () {
+}
+
 fn parse_key(key: &str) -> Result<Option<u16>> {
     let k = key.trim();
     if k.is_empty() {
         return Ok(None);
     }
-    use core_graphics::event::KeyCode as K;
-    let code = match k.to_uppercase().as_str() {
-        "SPACE" => Some(K::SPACE),
-        "ENTER" | "RETURN" => Some(K::RETURN),
-        "TAB" => Some(K::TAB),
-        "ESC" | "ESCAPE" => Some(K::ESCAPE),
-        "DELETE" => Some(K::DELETE),
-        "HOME" => Some(K::HOME),
-        "END" => Some(K::END),
-        "PAGEUP" => Some(K::PAGE_UP),
-        "PAGEDOWN" => Some(K::PAGE_DOWN),
-        "LEFT" | "ARROWLEFT" => Some(K::LEFT_ARROW),
-        "RIGHT" | "ARROWRIGHT" => Some(K::RIGHT_ARROW),
-        "UP" | "ARROWUP" => Some(K::UP_ARROW),
-        "DOWN" | "ARROWDOWN" => Some(K::DOWN_ARROW),
-        "F1" => Some(K::F1),
-        "F2" => Some(K::F2),
-        "F3" => Some(K::F3),
-        "F4" => Some(K::F4),
-        "F5" => Some(K::F5),
-        "F6" => Some(K::F6),
-        "F7" => Some(K::F7),
-        "F8" => Some(K::F8),
-        "F9" => Some(K::F9),
-        "F10" => Some(K::F10),
-        "F11" => Some(K::F11),
-        "F12" => Some(K::F12),
-        "0" | "DIGIT0" => Some(K::ANSI_0),
-        "1" | "DIGIT1" => Some(K::ANSI_1),
-        "2" | "DIGIT2" => Some(K::ANSI_2),
-        "3" | "DIGIT3" => Some(K::ANSI_3),
-        "4" | "DIGIT4" => Some(K::ANSI_4),
-        "5" | "DIGIT5" => Some(K::ANSI_5),
-        "6" | "DIGIT6" => Some(K::ANSI_6),
-        "7" | "DIGIT7" => Some(K::ANSI_7),
-        "8" | "DIGIT8" => Some(K::ANSI_8),
-        "9" | "DIGIT9" => Some(K::ANSI_9),
-        "A" => Some(K::ANSI_A),
-        "B" => Some(K::ANSI_B),
-        "C" => Some(K::ANSI_C),
-        "D" => Some(K::ANSI_D),
-        "E" => Some(K::ANSI_E),
-        "F" => Some(K::ANSI_F),
-        "G" => Some(K::ANSI_G),
-        "H" => Some(K::ANSI_H),
-        "I" => Some(K::ANSI_I),
-        "J" => Some(K::ANSI_J),
-        "K" => Some(K::ANSI_K),
-        "L" => Some(K::ANSI_L),
-        "M" => Some(K::ANSI_M),
-        "N" => Some(K::ANSI_N),
-        "O" => Some(K::ANSI_O),
-        "P" => Some(K::ANSI_P),
-        "Q" => Some(K::ANSI_Q),
-        "R" => Some(K::ANSI_R),
-        "S" => Some(K::ANSI_S),
-        "T" => Some(K::ANSI_T),
-        "U" => Some(K::ANSI_U),
-        "V" => Some(K::ANSI_V),
-        "W" => Some(K::ANSI_W),
-        "X" => Some(K::ANSI_X),
-        "Y" => Some(K::ANSI_Y),
-        "Z" => Some(K::ANSI_Z),
-        "`" | "BACKQUOTE" | "GRAVE" => Some(K::ANSI_GRAVE),
-        "MINUS" | "-" => Some(K::ANSI_MINUS),
-        "EQUAL" | "=" => Some(K::ANSI_EQUAL),
-        "[" | "BRACKETLEFT" => Some(K::ANSI_LEFT_BRACKET),
-        "]" | "BRACKETRIGHT" => Some(K::ANSI_RIGHT_BRACKET),
-        "\\" | "BACKSLASH" => Some(K::ANSI_BACKSLASH),
-        ";" | "SEMICOLON" => Some(K::ANSI_SEMICOLON),
-        "'" | "QUOTE" => Some(K::ANSI_QUOTE),
-        "," | "COMMA" => Some(K::ANSI_COMMA),
-        "." | "PERIOD" => Some(K::ANSI_PERIOD),
-        "/" | "SLASH" => Some(K::ANSI_SLASH),
-        _ => None,
-    };
-    match code {
-        Some(c) => Ok(Some(c)),
-        None => anyhow::bail!("Unsupported hotkey key: {}", k),
+    #[cfg(target_os = "macos")]
+    {
+        use core_graphics::event::KeyCode as K;
+        let code = match k.to_uppercase().as_str() {
+            "SPACE" => Some(K::SPACE),
+            "ENTER" | "RETURN" => Some(K::RETURN),
+            "TAB" => Some(K::TAB),
+            "ESC" | "ESCAPE" => Some(K::ESCAPE),
+            "DELETE" => Some(K::DELETE),
+            "HOME" => Some(K::HOME),
+            "END" => Some(K::END),
+            "PAGEUP" => Some(K::PAGE_UP),
+            "PAGEDOWN" => Some(K::PAGE_DOWN),
+            "LEFT" | "ARROWLEFT" => Some(K::LEFT_ARROW),
+            "RIGHT" | "ARROWRIGHT" => Some(K::RIGHT_ARROW),
+            "UP" | "ARROWUP" => Some(K::UP_ARROW),
+            "DOWN" | "ARROWDOWN" => Some(K::DOWN_ARROW),
+            "F1" => Some(K::F1),
+            "F2" => Some(K::F2),
+            "F3" => Some(K::F3),
+            "F4" => Some(K::F4),
+            "F5" => Some(K::F5),
+            "F6" => Some(K::F6),
+            "F7" => Some(K::F7),
+            "F8" => Some(K::F8),
+            "F9" => Some(K::F9),
+            "F10" => Some(K::F10),
+            "F11" => Some(K::F11),
+            "F12" => Some(K::F12),
+            "0" | "DIGIT0" => Some(K::ANSI_0),
+            "1" | "DIGIT1" => Some(K::ANSI_1),
+            "2" | "DIGIT2" => Some(K::ANSI_2),
+            "3" | "DIGIT3" => Some(K::ANSI_3),
+            "4" | "DIGIT4" => Some(K::ANSI_4),
+            "5" | "DIGIT5" => Some(K::ANSI_5),
+            "6" | "DIGIT6" => Some(K::ANSI_6),
+            "7" | "DIGIT7" => Some(K::ANSI_7),
+            "8" | "DIGIT8" => Some(K::ANSI_8),
+            "9" | "DIGIT9" => Some(K::ANSI_9),
+            "A" => Some(K::ANSI_A),
+            "B" => Some(K::ANSI_B),
+            "C" => Some(K::ANSI_C),
+            "D" => Some(K::ANSI_D),
+            "E" => Some(K::ANSI_E),
+            "F" => Some(K::ANSI_F),
+            "G" => Some(K::ANSI_G),
+            "H" => Some(K::ANSI_H),
+            "I" => Some(K::ANSI_I),
+            "J" => Some(K::ANSI_J),
+            "K" => Some(K::ANSI_K),
+            "L" => Some(K::ANSI_L),
+            "M" => Some(K::ANSI_M),
+            "N" => Some(K::ANSI_N),
+            "O" => Some(K::ANSI_O),
+            "P" => Some(K::ANSI_P),
+            "Q" => Some(K::ANSI_Q),
+            "R" => Some(K::ANSI_R),
+            "S" => Some(K::ANSI_S),
+            "T" => Some(K::ANSI_T),
+            "U" => Some(K::ANSI_U),
+            "V" => Some(K::ANSI_V),
+            "W" => Some(K::ANSI_W),
+            "X" => Some(K::ANSI_X),
+            "Y" => Some(K::ANSI_Y),
+            "Z" => Some(K::ANSI_Z),
+            "`" | "BACKQUOTE" | "GRAVE" => Some(K::ANSI_GRAVE),
+            "MINUS" | "-" => Some(K::ANSI_MINUS),
+            "EQUAL" | "=" => Some(K::ANSI_EQUAL),
+            "[" | "BRACKETLEFT" => Some(K::ANSI_LEFT_BRACKET),
+            "]" | "BRACKETRIGHT" => Some(K::ANSI_RIGHT_BRACKET),
+            "\\" | "BACKSLASH" => Some(K::ANSI_BACKSLASH),
+            ";" | "SEMICOLON" => Some(K::ANSI_SEMICOLON),
+            "'" | "QUOTE" => Some(K::ANSI_QUOTE),
+            "," | "COMMA" => Some(K::ANSI_COMMA),
+            "." | "PERIOD" => Some(K::ANSI_PERIOD),
+            "/" | "SLASH" => Some(K::ANSI_SLASH),
+            _ => None,
+        };
+        match code {
+            Some(c) => Ok(Some(c)),
+            None => anyhow::bail!("Unsupported hotkey key: {}", k),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        anyhow::bail!("Hotkeys only supported on macOS, unsupported key: {}", k)
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    use core_graphics::event::CGEventFlags;
 
     #[test]
     fn test_parse_modifiers_shift_ctrl() {
@@ -400,5 +467,24 @@ mod tests {
     #[test]
     fn test_parse_key_unsupported() {
         assert!(parse_key("Fn").is_err());
+    }
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_key_empty_is_modifier_only() {
+        assert!(parse_key("").unwrap().is_none());
+        assert!(parse_key("  ").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_hotkey_manager_fails_on_non_macos() {
+        let running = Arc::new(AtomicBool::new(true));
+        let res = HotkeyManager::new("", "Shift+Control", running);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("macOS"));
     }
 }

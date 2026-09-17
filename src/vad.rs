@@ -11,10 +11,12 @@ const STATE_SIZE: usize = 128;
 const SAMPLE_RATE: i64 = 16000;
 
 static MODEL_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".config")
-        .join("miccli")
+    crate::config::config_dir().unwrap_or_else(|_| {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".config")
+            .join("miccli")
+    })
 });
 
 pub fn model_path() -> PathBuf {
@@ -32,11 +34,14 @@ pub fn ensure_model() -> Result<PathBuf> {
 
     println!("Downloading Silero VAD model...");
     let url = "https://github.com/snakers4/silero-vad/raw/refs/tags/v5.0/files/silero_vad.onnx";
-    let bytes = reqwest::blocking::get(url)
-        .context("Failed to download Silero VAD model")?
-        .bytes()
-        .context("Failed to read model bytes")?;
-    std::fs::write(&path, &bytes)?;
+    let resp = reqwest::blocking::get(url).context("Failed to download Silero VAD model")?;
+    if !resp.status().is_success() {
+        anyhow::bail!("Silero VAD download failed: HTTP {}", resp.status());
+    }
+    let bytes = resp.bytes().context("Failed to read model bytes")?;
+    let tmp_path = path.with_extension("onnx.tmp");
+    std::fs::write(&tmp_path, &bytes).context("Failed to write VAD tmp")?;
+    std::fs::rename(&tmp_path, &path).context("Failed to finalize VAD model")?;
     println!("Downloaded Silero VAD to {}", path.display());
 
     Ok(path)

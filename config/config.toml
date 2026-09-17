@@ -15,7 +15,7 @@ min_silence_ms = 500
 [llm]
 provider = "ollama"
 model = "qwen2.5:1.5b"
-enabled = true
+enabled = false               # opt-in: prompt on first run (1=disabled, 2=ollama, 3=groq BYOK, 4=openai BYOK)
 
 [insertion]
 default = "auto"

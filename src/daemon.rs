@@ -14,22 +14,74 @@ use crate::stt;
 use crate::tui;
 use crate::vad::{SileroVad, VadEvent};
 
+pub fn pid_file_path() -> Result<std::path::PathBuf> {
+    config::pid_file_path()
+}
+
+fn default_log_path() -> Result<std::path::PathBuf> {
+    config::log_file_path()
+}
+
+#[cfg(unix)]
+fn is_process_alive(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn is_process_alive(_pid: i32) -> bool {
+    false
+}
+
+struct PidFileGuard {
+    path: std::path::PathBuf,
+}
+impl Drop for PidFileGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 pub async fn start() -> Result<()> {
     let cfg = config::load_config()?;
     let running = Arc::new(AtomicBool::new(true));
     let paused = Arc::new(AtomicBool::new(false));
 
-    // Signal handler for SIGUSR1 (toggle pause)
+    // Signal handlers for SIGUSR1 (toggle) and SIGTERM/SIGINT (graceful stop)
     setup_pause_handler(paused.clone());
+    setup_termination_handler(running.clone());
 
-    // Write PID file
-    let pid_file = dirs::home_dir()
-        .context("No home dir")?
-        .join(".config")
-        .join("miccli")
-        .join("miccli.pid");
-    fs::create_dir_all(pid_file.parent().unwrap())?;
+    // PID file with duplicate-instance protection
+    let pid_file = pid_file_path()?;
+    // Check for stale or running instance before writing
+    if pid_file.exists() {
+        if let Ok(pid_str) = fs::read_to_string(&pid_file) {
+            if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                if is_process_alive(pid) {
+                    anyhow::bail!(
+                        "miccli is already running (PID {}), use `miccli stop` or `miccli restart` or `miccli status`",
+                        pid
+                    );
+                } else {
+                    tracing::warn!("Removing stale PID file (PID {} not running)", pid);
+                    let _ = fs::remove_file(&pid_file);
+                }
+            } else {
+                let _ = fs::remove_file(&pid_file);
+            }
+        }
+    }
+    fs::create_dir_all(pid_file.parent().context("PID file has no parent")?)?;
     fs::write(&pid_file, std::process::id().to_string())?;
+    let _pid_guard = PidFileGuard {
+        path: pid_file.clone(),
+    };
+    // Ensure PID file removed even on panic (unwind)
+    let pid_for_hook = pid_file.clone();
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = fs::remove_file(&pid_for_hook);
+        prev_hook(info);
+    }));
 
     // Ensure Whisper model is downloaded
     let model_path = stt::ensure_model(&cfg.whisper.model)?;
@@ -57,9 +109,9 @@ pub async fn start() -> Result<()> {
     let mode = tui::AppMode::from_str(&cfg.tui.mode);
     let is_tty = tui::is_tty();
 
-    let result = match (mode, is_tty) {
-        (tui::AppMode::None, _) | (_, false) => {
-            // Plain logs (config none or not a TTY)
+    let result = match mode {
+        tui::AppMode::None => {
+            // Plain logs (tui.mode = none)
             run_plain_loop(
                 &cfg,
                 &stt_engine,
@@ -68,12 +120,12 @@ pub async fn start() -> Result<()> {
                 audio_rx,
                 running.clone(),
                 paused.clone(),
-                &hotkey_manager.combo().to_string(),
+                hotkey_manager.combo(),
             )
             .await
         }
-        (tui::AppMode::Dashboard, true) => {
-            // Persistent full dashboard as daemon (if user sets tui.mode=dashboard)
+        tui::AppMode::Dashboard if is_tty => {
+            // Persistent full dashboard as daemon (if user sets tui.mode=dashboard and TTY)
             match tui::init_terminal() {
                 Ok(mut terminal) => {
                     let r = run_dashboard_loop(
@@ -100,14 +152,31 @@ pub async fn start() -> Result<()> {
                         audio_rx,
                         running.clone(),
                         paused.clone(),
-                        &hotkey_manager.combo().to_string(),
+                        hotkey_manager.combo(),
                     )
                     .await
                 }
             }
         }
-        (tui::AppMode::Overlay, true) => {
-            // Whisperflow-style: blank when idle, small overlay only while recording
+        tui::AppMode::Dashboard => {
+            // Dashboard Fallback: not a TTY, use plain logs
+            tracing::info!("tui.mode=dashboard but not a TTY, falling back to plain logs");
+            run_plain_loop(
+                &cfg,
+                &stt_engine,
+                &mut vad_engine,
+                &hotkey_manager,
+                audio_rx,
+                running.clone(),
+                paused.clone(),
+                hotkey_manager.combo(),
+            )
+            .await
+        }
+        tui::AppMode::Overlay => {
+            // Whisperflow-style: overlay is global (NSWindow) and independent of terminal TTY.
+            // Run overlay even when not a TTY (background daemon with stdout redirected to log).
+            // Falls back to plain only if overlay creation fails internally.
             run_overlay_loop(
                 &cfg,
                 &stt_engine,
@@ -129,11 +198,7 @@ pub async fn start() -> Result<()> {
 
 /// Dashboard command: stop daemon if running → show full 4-tab dashboard → auto-restart daemon
 pub async fn dashboard() -> Result<()> {
-    let pid_file = dirs::home_dir()
-        .context("No home dir")?
-        .join(".config")
-        .join("miccli")
-        .join("miccli.pid");
+    let pid_file = config::pid_file_path()?;
     let was_running = pid_file.exists();
     if was_running {
         println!("Stopping running miccli daemon...");
@@ -248,6 +313,45 @@ fn setup_pause_handler(paused: Arc<AtomicBool>) {
     }
 }
 
+fn setup_termination_handler(running: Arc<AtomicBool>) {
+    #[cfg(unix)]
+    {
+        let r1 = running.clone();
+        tokio::spawn(async move {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                if let Ok(mut sigterm) = signal(SignalKind::terminate()) {
+                    while sigterm.recv().await.is_some() {
+                        tracing::info!("SIGTERM received, stopping daemon");
+                        r1.store(false, Ordering::Relaxed);
+                        // Break after first, but keep loop for potential second signal to force exit
+                        // Next recv will block until second SIGTERM, if daemon hasn't exited yet
+                        // we keep handling but running already false
+                    }
+                }
+            }
+        });
+        let r2 = running.clone();
+        tokio::spawn(async move {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                if let Ok(mut sigint) = signal(SignalKind::interrupt()) {
+                    while sigint.recv().await.is_some() {
+                        tracing::info!("SIGINT received, stopping daemon");
+                        r2.store(false, Ordering::Relaxed);
+                    }
+                }
+            }
+        });
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = running;
+    }
+}
+
 async fn run_plain_loop(
     cfg: &config::Config,
     stt_engine: &stt::WhisperStt,
@@ -344,7 +448,7 @@ async fn run_dashboard_loop(
     use tui::{ui, WaveformHistory};
 
     let mut app = tui::build_initial_state(
-        &hotkey_manager.combo(),
+        hotkey_manager.combo(),
         &cfg.whisper.model,
         cfg.vad.threshold,
     );
@@ -403,15 +507,14 @@ async fn run_dashboard_loop(
             }
         }
 
-        if !had_chunk {
-            if tick % 3 == 0 {
+        if !had_chunk
+            && tick % 3 == 0 {
                 if is_recording && !app.paused {
                     waveform.push_level(0);
                 } else if tick % 6 == 0 {
                     waveform.push_silence();
                 }
             }
-        }
 
         if vad_triggered && is_recording {
             pending_vad_stop = true;
@@ -551,7 +654,7 @@ async fn run_overlay_loop(
     use tui::{ui, WaveformHistory};
 
     let mut app = tui::build_initial_state(
-        &hotkey_manager.combo(),
+        hotkey_manager.combo(),
         &cfg.whisper.model,
         cfg.vad.threshold,
     );
@@ -656,8 +759,8 @@ async fn run_overlay_loop(
             }
         }
 
-        if !had_chunk && is_recording && !app.paused {
-            if tick % 3 == 0 {
+        if !had_chunk && is_recording && !app.paused
+            && tick % 3 == 0 {
                 waveform.push_level(0);
                 if has_native {
                     if let Some(h) = native_overlay.as_ref() {
@@ -666,7 +769,6 @@ async fn run_overlay_loop(
                     }
                 }
             }
-        }
 
         if vad_triggered && is_recording {
             pending_vad_stop = true;
@@ -1129,12 +1231,66 @@ async fn process_and_insert(
     Ok(())
 }
 
+pub fn status() -> Result<()> {
+    let pid_file = pid_file_path()?;
+    let log_path = default_log_path()?;
+    if !pid_file.exists() {
+        println!("miccli is not running (no PID file)");
+        if log_path.exists() {
+            println!("log: {}", log_path.display());
+            if let Ok(meta) = fs::metadata(&log_path) {
+                println!("log size: {} bytes", meta.len());
+            }
+        }
+        return Ok(());
+    }
+    let pid_str = fs::read_to_string(&pid_file)?;
+    let pid: i32 = match pid_str.trim().parse() {
+        Ok(v) => v,
+        Err(_) => {
+            println!("miccli PID file is invalid, removing stale file");
+            let _ = fs::remove_file(&pid_file);
+            return Ok(());
+        }
+    };
+    if is_process_alive(pid) {
+        println!("miccli is running (PID {})", pid);
+        println!("PID file: {}", pid_file.display());
+        println!("log: {} {}", log_path.display(), if log_path.exists() { "" } else { "(not yet created)" });
+        if log_path.exists() {
+            if let Ok(meta) = fs::metadata(&log_path) {
+                println!("log size: {} bytes", meta.len());
+            }
+            // Show last few lines if small
+            if let Ok(content) = fs::read_to_string(&log_path) {
+                let lines: Vec<&str> = content.lines().collect();
+                if !lines.is_empty() {
+                    println!("--- last log lines ---");
+                    for line in lines.iter().rev().take(5).rev() {
+                        println!("{}", line);
+                    }
+                }
+            }
+        }
+        // Try to detect if process is backgrounded (PPID 1)
+        #[cfg(unix)]
+        {
+            // Check via ps or just report
+            println!("use `miccli stop` to stop, `miccli toggle` to pause/resume, `miccli restart` to restart");
+        }
+    } else {
+        println!("miccli PID file is stale (PID {} not running), removing", pid);
+        let _ = fs::remove_file(&pid_file);
+        println!("miccli is not running");
+        if log_path.exists() {
+            println!("log: {}", log_path.display());
+        }
+    }
+    Ok(())
+}
+
 pub fn send_signal(signal: &str) -> Result<()> {
-    let pid_file = dirs::home_dir()
-        .context("No home dir")?
-        .join(".config")
-        .join("miccli")
-        .join("miccli.pid");
+    let pid_file = pid_file_path()?;
 
     if !pid_file.exists() {
         anyhow::bail!("miccli is not running (no PID file found)");

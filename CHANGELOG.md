@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-17
+
+### Added
+- First stable release (1.0.0) — macOS only.
+
+### Changed
+- **LLM cleanup now opt-in** — `enabled = false` by default (`src/config.rs:default_llm_enabled`, `config/config.toml`, `src/tui/mod.rs:default_config_text`). First run prompts `1) disabled / 2) Ollama / 3) Groq BYOK / 4) OpenAI BYOK` (TTY only, 30s timeout, `MICCLI_NO_PROMPT=1`/`CI` skips) and persists choice to `~/.config/miccli/config.toml` (`src/config.rs:prompt_llm_setup`, `write_config`). No more silent Ollama requests on every dictation.
+- **macOS only claim** — `src/hotkey.rs` now gated with `#[cfg(target_os="macos")]` stub that bails with friendly error on Linux; `README.md:234` updated to `macOS 13+ only`, `Cargo.toml:5` MSRV `1.80`.
+- **Cargo metadata fixed** — `Cargo.toml:9-10` repository/homepage → `https://github.com/AkashJana18/miccli`, removed deprecated `[badges]` and unused `thiserror`, removed `documentation` (binary crate), bump `rust-version` `1.75` → `1.80` for `LazyLock`.
+- **Config paths respect XDG** — `src/config.rs:config_dir()` now uses `dirs::config_dir()` with `~/.config/miccli` legacy fallback on macOS; `src/daemon.rs:17`, `src/stt.rs:65`, `src/vad.rs:14`, `src/models.rs:91`, `src/tui/mod.rs:134` now call `config::config_dir()`/`pid_file_path()`/`log_file_path()` instead of hardcoded `home_dir().join(".config")`.
+
+### Fixed
+- **Audio stereo bug** — `src/audio.rs:166` `PendingResampler::new` now always `channels=1` after mono mixdown (previously used `source_channels` but fed mono Vec, so stereo mics dropped chunks).
+- **Model download corruption** — `src/stt.rs:95`, `src/vad.rs:41`, `src/models.rs:71` now atomic (`write .tmp` + `rename`) and check HTTP status; interrupted downloads no longer leave corrupt `ggml-*.bin`/`silero_vad.onnx`.
+- **Panics → errors** — `src/audio.rs:150` `lock().unwrap()` → `unwrap_or_else(|e| e.into_inner())`, `src/daemon.rs:73` `parent().unwrap()` → `context`, `src/main.rs:107,168` `Runtime::new().unwrap()` → `expect`, `src/main.rs:120,179` `join().unwrap()` → `map_err`, `src/main.rs:278,366` `CString::new(...).unwrap()` now handles NUL in user log path, `src/overlay.rs:304` `Class::get().unwrap()` → `if let Some`.
+- **Git ignore** — `/.gitignore:2` no longer ignores `Cargo.lock` (binary crate should be committed); added `*.log`/`miccli.log`/` .env`.
+
+## [0.3.4] - 2026-09-14
+
+### Added
+- **Status & restart** — `miccli status` shows running PID, PID file, log location/size/last lines and detects stale PID; `miccli restart [--background] [--log-file PATH]` stops (SIGTERM, wait 5s+0.3s) then starts (reuses `daemonize`).
+  - `src/main.rs:Commands::{Status, Restart}` and `src/daemon.rs:status()` + `pid_file_path()`/`default_log_path()`/`is_process_alive()`.
+  - `src/main.rs:Restart` mirrors `Start` flags (`-b/--background`, `--log-file`).
+- **Duplicate-instance guard** — `miccli start` / `miccli start --background` / `miccli restart` now check `~/.config/miccli/miccli.pid` via `libc::kill(pid,0)` before forking and in `daemon::start()` (`src/main.rs:check_duplicate_instance`, `src/daemon.rs:start`); stale PID files are auto-removed, live instance bails with `already running (PID X), use miccli stop/restart/status`.
+- **Background log file** — `miccli start --background` now defaults to `~/.config/miccli/miccli.log` (or `--log-file PATH`), daemon redirects stdout/stderr via `dup2` append (`src/main.rs:daemonize(log_file)`), parent prints `PID + log path`; `miccli status` shows log size/tail.
+- **Panic-safe PID cleanup** — `PidFileGuard` (`Drop` removes PID file) + `std::panic::set_hook` in `daemon::start` ensures PID file removed on panic/unwind; normal exit also removes via explicit `fs::remove_file` + guard double-remove is harmless. Fixes stale PID after crash.
+  - Added `setup_termination_handler` already in `0.3.3` but now complemented by guard.
+- Bumped `Cargo.toml` `0.3.3` → `0.3.4`.
+
+## [0.3.3] - 2026-09-14
+
+### Added
+- **Background daemon** — `miccli start --background` (`-b`) daemonizes via double-fork, parent exits immediately, overlay stays global. The native overlay (`NSWindow` level 1000) is independent of the terminal, so it remains visible after the terminal returns. Works on both macOS (child keeps `CFRunLoop` + daemon alive) and Linux (`tokio::runtime` alive). `miccli stop` / `miccli toggle` (PID file `~/.config/miccli/miccli.pid` + `SIGTERM` / `SIGUSR1` via `libc::kill`) and `miccli dashboard` (stops daemon, shows TUI, restarts) continue unchanged. Without `--background`, `miccli start` still blocks as before.
+  - `src/main.rs:Commands::Start` now `Start { #[arg(short, long)] background: bool }`, `daemonize()` helper (`libc::fork` → `setsid` → `fork` → `dup2 /dev/null`, `umask 0`) on `cfg(unix)`, `bail!` on non-unix.
+  - Bumped `Cargo.toml` `0.3.2` → `0.3.3`.
+
 ## [0.3.2] - 2026-09-13
 
 ### Fixed
@@ -88,7 +124,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Energy-based VAD placeholder (Silero integration planned)
 - MCP server subcommand (planned)
 
-[Unreleased]: https://github.com/AkashJana18/miccli/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/AkashJana18/miccli/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/AkashJana18/miccli/compare/v0.3.4...v1.0.0
+[0.3.4]: https://github.com/AkashJana18/miccli/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/AkashJana18/miccli/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/AkashJana18/miccli/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/AkashJana18/miccli/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/AkashJana18/miccli/compare/v0.2.0...v0.3.0

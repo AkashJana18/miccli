@@ -68,7 +68,9 @@ pub fn download(name: &str) -> Result<()> {
 
     let bytes = response.bytes().context("Failed to read download")?;
 
-    fs::write(&path, &bytes).context("Failed to write model file")?;
+    let tmp_path = path.with_extension("bin.tmp");
+    fs::write(&tmp_path, &bytes).context("Failed to write model tmp")?;
+    fs::rename(&tmp_path, &path).context("Failed to finalize model file")?;
 
     println!("✅ Model '{}' downloaded to {}", name, path.display());
     Ok(())
@@ -88,12 +90,7 @@ pub fn remove(name: &str) -> Result<()> {
 }
 
 fn model_dir() -> Result<PathBuf> {
-    let dir = dirs::home_dir()
-        .context("No home directory")?
-        .join(".config")
-        .join("miccli")
-        .join("models");
-
+    let dir = crate::config::config_dir()?.join("models");
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }

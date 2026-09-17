@@ -62,12 +62,7 @@ impl WhisperStt {
 }
 
 pub fn model_path(model_name: &str) -> Result<PathBuf> {
-    let model_dir = dirs::home_dir()
-        .context("No home dir")?
-        .join(".config")
-        .join("miccli")
-        .join("models");
-
+    let model_dir = crate::config::config_dir()?.join("models");
     Ok(model_dir.join(format!("ggml-{}.bin", model_name)))
 }
 
@@ -97,8 +92,17 @@ fn download_whisper_model(name: &str, path: &Path) -> Result<()> {
         .send()
         .context("Download failed")?;
 
+    if !response.status().is_success() {
+        anyhow::bail!("Download failed: HTTP {}", response.status());
+    }
     let bytes = response.bytes().context("Failed to read response")?;
-    std::fs::write(path, &bytes).context("Failed to write model")?;
+    // Atomic write: write to tmp then rename so interrupted downloads don't leave corrupt file
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context("Failed to create model dir")?;
+    }
+    let tmp_path = path.with_extension("bin.tmp");
+    std::fs::write(&tmp_path, &bytes).context("Failed to write model tmp")?;
+    std::fs::rename(&tmp_path, path).context("Failed to finalize model file")?;
 
     Ok(())
 }

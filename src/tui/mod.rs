@@ -131,29 +131,22 @@ pub fn build_initial_state(
 ) -> AppState {
     use std::path::PathBuf;
 
-    let config_path = dirs::home_dir()
-        .map(|h| h.join(".config").join("miccli").join("config.toml"))
-        .unwrap_or_else(|| PathBuf::from("~/.config/miccli/config.toml"))
-        .display()
-        .to_string();
+    let config_path = crate::config::config_dir()
+        .map(|p| p.join("config.toml").display().to_string())
+        .unwrap_or_else(|_| "~/.config/miccli/config.toml".to_string());
 
-    let config_text = std::fs::read_to_string(
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".config")
-            .join("miccli")
-            .join("config.toml"),
-    )
-    .unwrap_or_else(|_| {
-        "# No config file yet — using defaults.\n# Edit ~/.config/miccli/config.toml to customize.\n".to_string()
-            + &default_config_text()
-    });
+    let config_file = crate::config::config_dir()
+        .map(|p| p.join("config.toml"))
+        .unwrap_or_else(|_| PathBuf::from("~/.config/miccli/config.toml"));
+    let config_text = std::fs::read_to_string(&config_file)
+        .unwrap_or_else(|_| {
+            "# No config file yet — using defaults.\n# Edit ~/.config/miccli/config.toml to customize.\n".to_string()
+                + &default_config_text()
+        });
 
-    let model_dir = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".config")
-        .join("miccli")
-        .join("models");
+    let model_dir = crate::config::config_dir()
+        .map(|p| p.join("models"))
+        .unwrap_or_else(|_| PathBuf::from("~/.config/miccli/models"));
 
     let model_rows = vec![
         ModelRow {
@@ -218,7 +211,7 @@ min_silence_ms = 500
 [llm]
 provider = "ollama"
 model = "qwen2.5:1.5b"
-enabled = true
+enabled = false               # opt-in: 1=disabled, 2=ollama local, 3=groq BYOK, 4=openai BYOK
 
 [insertion]
 default = "auto"

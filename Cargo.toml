@@ -1,20 +1,16 @@
 [package]
 name = "miccli"
-version = "0.3.2"
+version = "1.0.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.80"
 authors = ["miccli contributors"]
 description = "Terminal voice dictation CLI — local Whisper STT + code-aware cleanup + smart text insertion"
 license = "MIT"
-repository = "https://github.com/miccli/miccli"
-homepage = "https://github.com/miccli/miccli"
-documentation = "https://docs.rs/miccli"
+repository = "https://github.com/AkashJana18/miccli"
+homepage = "https://github.com/AkashJana18/miccli"
 readme = "README.md"
 keywords = ["voice", "dictation", "whisper", "terminal", "stt"]
 categories = ["command-line-utilities", "accessibility"]
-
-[badges]
-maintenance = { status = "actively-developed" }
 
 [dependencies]
 cpal = "0.16"
@@ -30,7 +26,6 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
-thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "5"

@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default = "default_hotkey")]
     pub hotkey: HotkeyConfig,
@@ -18,7 +18,7 @@ pub struct Config {
     pub tui: TuiConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HotkeyConfig {
     #[serde(default = "default_hotkey_key")]
     pub key: String,
@@ -26,7 +26,7 @@ pub struct HotkeyConfig {
     pub modifier: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WhisperConfig {
     #[serde(default = "default_model")]
     pub model: String,
@@ -36,7 +36,7 @@ pub struct WhisperConfig {
     pub metal: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VadConfig {
     #[serde(default = "default_vad_threshold")]
     pub threshold: f32,
@@ -46,7 +46,7 @@ pub struct VadConfig {
     pub min_silence_ms: u32,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct LlmConfig {
     #[serde(default = "default_llm_provider")]
     pub provider: String,
@@ -56,11 +56,11 @@ pub struct LlmConfig {
     pub api_key_env: Option<String>,
     #[serde(default)]
     pub base_url: Option<String>,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_llm_enabled")]
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct InsertionConfig {
     #[serde(default = "default_insertion_strategy")]
     pub default: String,
@@ -74,13 +74,13 @@ pub struct InsertionConfig {
     pub apps: Vec<AppOverride>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppOverride {
     pub bundle_id: String,
     pub strategy: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TuiConfig {
     #[serde(default = "default_tui_mode")]
     pub mode: String,
@@ -128,6 +128,7 @@ fn default_min_silence_ms() -> u32 { 500 }
 
 fn default_llm_provider() -> String { "ollama".into() }
 fn default_true() -> bool { true }
+fn default_llm_enabled() -> bool { false }
 
 fn default_llm() -> LlmConfig {
     LlmConfig {
@@ -135,7 +136,7 @@ fn default_llm() -> LlmConfig {
         model: None,
         api_key_env: None,
         base_url: None,
-        enabled: default_true(),
+        enabled: default_llm_enabled(),
     }
 }
 
@@ -163,7 +164,7 @@ impl Default for Config {
                 model: None,
                 api_key_env: None,
                 base_url: None,
-                enabled: default_true(),
+                enabled: default_llm_enabled(),
             },
             insertion: default_insertion(),
             tui: default_tui(),
@@ -172,8 +173,35 @@ impl Default for Config {
 }
 
 pub fn config_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Could not determine home directory")?;
-    Ok(home.join(".config").join("miccli"))
+    // Respect XDG_CONFIG_HOME / platform config dir; keep ~/.config/miccli for
+    // backwards compat on macOS (where dirs::config_dir is ~/Library/Application Support).
+    if let Some(base) = dirs::config_dir() {
+        #[cfg(target_os = "macos")]
+        {
+            if std::env::var_os("XDG_CONFIG_HOME").is_none() {
+                if let Some(home) = dirs::home_dir() {
+                    let legacy = home.join(".config").join("miccli");
+                    // Prefer legacy ~/.config/miccli if it already exists or the new
+                    // location doesn't yet exist — preserves existing user configs.
+                    if legacy.exists() || !base.join("miccli").exists() {
+                        return Ok(legacy);
+                    }
+                }
+            }
+        }
+        Ok(base.join("miccli"))
+    } else {
+        let home = dirs::home_dir().context("Could not determine home or config directory")?;
+        Ok(home.join(".config").join("miccli"))
+    }
+}
+
+pub fn pid_file_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("miccli.pid"))
+}
+
+pub fn log_file_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("miccli.log"))
 }
 
 pub fn load_config() -> Result<Config> {
@@ -181,8 +209,27 @@ pub fn load_config() -> Result<Config> {
     let config_path = config_dir.join("config.toml");
 
     if !config_path.exists() {
-        tracing::info!("No config found at {}, using defaults", config_path.display());
-        return Ok(Config::default());
+        // First-run: offer LLM opt-in if interactive (TTY) and not in background daemon
+        if std::io::IsTerminal::is_terminal(&std::io::stdin())
+            && std::io::IsTerminal::is_terminal(&std::io::stderr())
+            && std::env::var_os("MICCLI_NO_PROMPT").is_none()
+        {
+            if let Some(chosen_llm) = prompt_llm_setup()? {
+                let cfg = Config { llm: chosen_llm, ..Default::default() };
+                // Persist the choice so next run doesn't re-prompt
+                if let Err(e) = write_config(&cfg) {
+                    tracing::warn!("Failed to write first-run config: {}", e);
+                } else {
+                    tracing::info!("Wrote first-run config to {}", config_path.display());
+                }
+                return Ok(cfg);
+            }
+        }
+        tracing::info!("No config found at {}, using defaults (LLM disabled, opt-in)", config_path.display());
+        // Write default config for discoverability (opt-in false)
+        let default_cfg = Config::default();
+        let _ = write_config(&default_cfg);
+        return Ok(default_cfg);
     }
 
     let contents = std::fs::read_to_string(&config_path)
@@ -192,6 +239,76 @@ pub fn load_config() -> Result<Config> {
         .with_context(|| format!("Failed to parse {}", config_path.display()))?;
 
     Ok(config)
+}
+
+fn write_config(cfg: &Config) -> Result<()> {
+    let dir = config_dir()?;
+    std::fs::create_dir_all(&dir).context("Failed to create config dir")?;
+    let path = dir.join("config.toml");
+    let toml_str = toml::to_string(cfg).context("Failed to serialize config")?;
+    let header = "# miccli config — edit and restart daemon (`miccli restart`) to apply\n\
+                  # LLM cleanup is opt-in (enabled = false by default). Enable via prompt or set enabled = true\n";
+    std::fs::write(&path, header.to_string() + &toml_str).context("Failed to write config")?;
+    Ok(())
+}
+
+fn prompt_llm_setup() -> Result<Option<LlmConfig>> {
+    use std::io::{self, Write};
+    // Don't prompt in CI / non-interactive envs
+    if std::env::var_os("CI").is_some() {
+        return Ok(None);
+    }
+    eprintln!();
+    eprintln!("miccli first run — LLM cleanup is disabled by default (opt-in).");
+    eprintln!("Enable AI-powered punctuation/filler cleanup?");
+    eprintln!("  1) No — keep disabled (default, fastest, offline)");
+    eprintln!("  2) Ollama — local, free (requires `ollama pull qwen2.5:1.5b`)");
+    eprintln!("  3) Groq — cloud, BYOK (requires GROQ_API_KEY env)");
+    eprintln!("  4) OpenAI — cloud, BYOK (requires OPENAI_API_KEY env)");
+    eprint!("Choice [1-4, default 1]: ");
+    let _ = io::stderr().flush();
+    // Spawn thread to avoid hanging background daemon forever (30s timeout)
+    let input = {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            let _ = io::stdin().read_line(&mut s);
+            let _ = tx.send(s);
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap_or_default()
+    };
+    let choice = input.trim();
+    let llm = match choice {
+        "2" => LlmConfig {
+            provider: "ollama".into(),
+            model: Some("qwen2.5:1.5b".into()),
+            api_key_env: None,
+            base_url: None,
+            enabled: true,
+        },
+        "3" => LlmConfig {
+            provider: "groq".into(),
+            model: Some("llama-3.1-8b-instant".into()),
+            api_key_env: Some("GROQ_API_KEY".into()),
+            base_url: None,
+            enabled: true,
+        },
+        "4" => LlmConfig {
+            provider: "openai".into(),
+            model: Some("gpt-4o-mini".into()),
+            api_key_env: Some("OPENAI_API_KEY".into()),
+            base_url: None,
+            enabled: true,
+        },
+        _ => return Ok(None), // 1, empty, or invalid → disabled
+    };
+    eprintln!("✓ LLM enabled: provider={}, model={}", llm.provider, llm.model.as_deref().unwrap_or("default"));
+    if llm.provider == "groq" || llm.provider == "openai" {
+        eprintln!("  Set {} env var before running `miccli start`", llm.api_key_env.as_deref().unwrap_or("API_KEY"));
+    } else if llm.provider == "ollama" {
+        eprintln!("  Run: ollama pull qwen2.5:1.5b  (if not already)");
+    }
+    Ok(Some(llm))
 }
 
 #[cfg(test)]

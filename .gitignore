@@ -1,7 +1,10 @@
 /target
-Cargo.lock
 *.swp
 *.swo
 *~
 .DS_Store
 silero_vad.onnx
+# miccli runtime logs (local only)
+miccli.log
+*.log
+.env

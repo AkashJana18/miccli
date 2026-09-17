@@ -1,8 +1,11 @@
 //! Global floating overlay for whisperflow mode.
 //! Visible on opencode / any terminal, not confined to daemon's tty.
 
+#![allow(unexpected_cfgs)]
+
 use std::time::Duration;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum OverlayMsg {
     Show,
@@ -79,8 +82,8 @@ pub fn spawn() -> Option<OverlayHandle> {
 // --- macOS window state (main queue only) ---
 #[cfg(target_os = "macos")]
 mod imp {
-    use super::*;
-    use cocoa::base::{id, nil};
+    
+    use cocoa::base::id;
     use std::sync::OnceLock;
 
     pub(super) struct WindowState {
@@ -100,7 +103,7 @@ mod imp {
 unsafe fn create_window() -> Option<bool> {
     use cocoa::appkit::{NSBackingStoreType, NSColor, NSScreen, NSWindow, NSWindowStyleMask};
     use cocoa::base::{id, nil, NO, YES};
-    use cocoa::foundation::{NSAutoreleasePool, NSRect, NSSize, NSPoint, NSString};
+    use cocoa::foundation::{NSAutoreleasePool, NSRect, NSSize, NSPoint};
     use imp::{WindowState, WINDOW};
 
     if WINDOW.get().is_some() {
@@ -190,7 +193,7 @@ unsafe fn create_window() -> Option<bool> {
 
 #[cfg(target_os = "macos")]
 unsafe fn do_show() {
-    use cocoa::base::nil;
+    
     use imp::{WINDOW, VISIBLE};
     use objc::{msg_send, sel, sel_impl};
     if let Some(s) = WINDOW.get() {
@@ -301,16 +304,22 @@ unsafe fn make_label(rect: cocoa::foundation::NSRect, text: &str, size: f64) -> 
     let font: id = if (size - 18.0).abs() < 0.1 {
         // Menlo for waveform — taller blocks
         let name = NSString::alloc(nil).init_str("Menlo");
-        let cls = objc::runtime::Class::get("NSFont").unwrap();
-        let f: id = msg_send![cls, fontWithName: name size: size];
-        if f == nil {
-            msg_send![cls, systemFontOfSize: size]
+        if let Some(cls) = objc::runtime::Class::get("NSFont") {
+            let f: id = msg_send![cls, fontWithName: name size: size];
+            if f == nil {
+                msg_send![cls, systemFontOfSize: size]
+            } else {
+                f
+            }
         } else {
-            f
+            nil
         }
     } else {
-        let cls = objc::runtime::Class::get("NSFont").unwrap();
-        msg_send![cls, systemFontOfSize: size]
+        if let Some(cls) = objc::runtime::Class::get("NSFont") {
+            msg_send![cls, systemFontOfSize: size]
+        } else {
+            nil
+        }
     };
     if font != nil {
         let _: () = msg_send![tf, setFont: font];

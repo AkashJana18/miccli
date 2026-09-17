@@ -86,7 +86,7 @@ pub fn apply(text: &str) -> String {
     .cloned()
     .collect();
 
-    for (_wrong, _right) in &homophones {
+    for _right in homophones.values() {
         // Only replace if it's clearly a mistake — skip for now, LLM handles these better
     }
 
@@ -104,7 +104,7 @@ pub fn apply(text: &str) -> String {
     // Add period at end if missing and text is a sentence
     let trimmed = result.trim();
     if !trimmed.is_empty()
-        && !trimmed.ends_with(|c: char| c == '.' || c == '!' || c == '?' || c == ';' || c == ':' || c == '}')
+        && !trimmed.ends_with(['.', '!', '?', ';', ':', '}'])
         && trimmed.len() > 5
     {
         result = format!("{}.", result.trim());

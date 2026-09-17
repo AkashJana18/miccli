@@ -147,7 +147,7 @@ fn push_sample(
     sink: &Arc<Mutex<PendingResampler>>,
     tx: &mpsc::Sender<Vec<f32>>,
 ) {
-    let mut sink = sink.lock().unwrap();
+    let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(chunk) = sink.push(sample) {
         if tx.send(chunk).is_err() {
             tracing::warn!("Audio receiver dropped");
@@ -164,7 +164,7 @@ struct PendingResampler {
 }
 
 impl PendingResampler {
-    fn new(source_rate: usize, channels: usize, block: usize) -> Result<Self> {
+    fn new(source_rate: usize, _channels: usize, block: usize) -> Result<Self> {
         let params = SincInterpolationParameters {
             sinc_len: 256,
             f_cutoff: 0.95,
@@ -172,12 +172,13 @@ impl PendingResampler {
             interpolation: SincInterpolationType::Cubic,
             window: WindowFunction::BlackmanHarris2,
         };
+        // We mix down to mono before resampling (see push_sample), so resampler is always mono
         let resampler = SincFixedIn::<f32>::new(
             TARGET_SAMPLE_RATE as f64 / source_rate as f64,
             1.1,
             params,
             block,
-            channels,
+            1,
         )
         .context("Failed to create resampler")?;
         Ok(PendingResampler {
