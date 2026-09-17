@@ -18,9 +18,9 @@ pub fn list() -> Result<()> {
     for (name, desc) in models {
         let path = model_dir.join(format!("ggml-{}.bin", name));
         let status = if path.exists() {
-            "✅ downloaded"
+            "installed"
         } else {
-            "   not downloaded"
+            "not installed"
         };
         println!("  {:>8}  {:<30}  {}", name, desc, status);
     }
@@ -72,7 +72,7 @@ pub fn download(name: &str) -> Result<()> {
     fs::write(&tmp_path, &bytes).context("Failed to write model tmp")?;
     fs::rename(&tmp_path, &path).context("Failed to finalize model file")?;
 
-    println!("✅ Model '{}' downloaded to {}", name, path.display());
+    println!("Model '{}' downloaded to {}", name, path.display());
     Ok(())
 }
 
@@ -85,7 +85,7 @@ pub fn remove(name: &str) -> Result<()> {
     }
 
     fs::remove_file(&path).context("Failed to remove model file")?;
-    println!("✅ Model '{}' removed", name);
+    println!("Model '{}' removed", name);
     Ok(())
 }
 

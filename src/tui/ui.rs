@@ -833,7 +833,7 @@ fn render_models(frame: &mut Frame, area: Rect, app: &AppState) {
             } else {
                 Style::default().fg(Color::White)
             };
-            let status = if m.installed { "✅ downloaded" } else { "○ not downloaded" };
+            let status = if m.installed { "installed" } else { "not installed" };
             let status_style = if m.installed {
                 Style::default().fg(Color::Green)
             } else {

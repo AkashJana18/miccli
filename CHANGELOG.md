@@ -90,7 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ratatui TUI (default)** — `miccli start` now shows a live TUI by default (fallback to plain logs with `--no-tui` or when not a TTY). Includes:
   - Live tab: waveform sparkline, transcription preview (raw vs cleaned), pipeline latencies (transcribe/cleanup/insert/total), and insertion target (app name + `type`/`paste` strategy)
   - Real-time **waveform visualization** (`src/tui/waveform.rs`) — RMS + peak blended to `0..100` levels with silence gating/decay, responsive to terminal width (60–220 cols), color-coded by amplitude
-  - **Models tab**: table of Whisper models (`tiny` 75 MB, `base` 142 MB, `small` 466 MB, `medium` 1.5 GB) with `✅ downloaded`/`○ not downloaded` status and active-model marker (`▶`)
+  - **Models tab**: table of Whisper models (`tiny` 75 MB, `base` 142 MB, `small` 466 MB, `medium` 1.5 GB) with `installed`/`not installed` status and active-model marker
   - **Config tab**: syntax-highlighted view of `~/.config/miccli/config.toml` (sections in magenta, keys in cyan, values in yellow)
   - **Help tab**: keybindings, insertion strategy explainer, and macOS permission checklist (Microphone + Accessibility)
   - Navigation: `q`/`Esc`/`Ctrl+C` quit, `Tab`/`Shift+Tab` cycle, `1`/`2`/`3`/`4` jump; pulsing `● REC`/`■ idle` indicator and 30–80 fps render loop via `tokio::time::sleep`
